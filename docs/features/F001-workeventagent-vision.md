@@ -8,7 +8,7 @@ created: 2026-06-29
 
 # F001: WorkEventAgent Vision and MVP
 
-> Status: spec | Owner: @cat-tv94q87o
+> Status: implemented (MVP) | Owner: @cat-tv94q87o
 
 ## Why
 
@@ -185,15 +185,15 @@ MVP assumes a single writer per project document. Parallel `opencode run` sessio
 
 ## Acceptance Criteria
 
-- [ ] AC-1: A user can submit a free-form text update and receive a structured archive proposal.
-- [ ] AC-2: The proposal can be confirmed, edited and re-confirmed, or canceled before any write.
-- [ ] AC-3: Confirmed updates append a Timeline event and update only the targeted Work Map task block.
-- [ ] AC-4: Current Snapshot can be regenerated and is never treated as authoritative history.
-- [ ] AC-5: SQLite can be rebuilt from project Markdown documents.
-- [ ] AC-6: Attachments are archived by path without image understanding.
-- [ ] AC-7: No new project is created by the agent without explicit manual setup.
-- [ ] AC-8: Golden examples verify expected Markdown and SQLite changes.
-- [ ] AC-9: New item/task proposals require explicit confirmation with generated IDs and exact Markdown insertion preview.
+- [x] AC-1: A user can submit a free-form text update and receive a structured archive proposal.
+- [x] AC-2: The proposal can be confirmed, edited and re-confirmed, or canceled before any write.
+- [x] AC-3: Confirmed updates append a Timeline event and update only the targeted Work Map task block.
+- [ ] AC-4: Current Snapshot can be regenerated and is never treated as authoritative history. (Architecture supports it; regeneration logic deferred past MVP.)
+- [x] AC-5: SQLite can be rebuilt from project Markdown documents.
+- [x] AC-6: Attachments are archived by path without image understanding.
+- [x] AC-7: No new project is created by the agent without explicit manual setup.
+- [x] AC-8: Golden examples verify expected Markdown and SQLite changes.
+- [x] AC-9: New item/task proposals require explicit confirmation with generated IDs and exact Markdown insertion preview.
 
 ## Golden Examples
 

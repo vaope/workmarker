@@ -129,7 +129,7 @@ def main(argv: list[str] | None = None, now: datetime | None = None) -> int:
         final = doc.apply_proposal(proposal, now_str)
 
     # 7.5. Append attachment paths to ## Attachments
-    final = ProjectDocument.append_attachments(final, proposal)
+    final = ProjectDocument.append_attachments(final, proposal, now)
 
     write_project_atomically(project_path, final)
 

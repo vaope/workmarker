@@ -110,6 +110,19 @@ class OpencodeRunnerTest(unittest.TestCase):
         with self.assertRaises(OpencodeRunnerError):
             parse_archivist_output(raw, "event-1")
 
+    def test_parse_archivist_output_rejects_new_task_without_task_title(self):
+        """🟡 new_task=true with empty task_title → OpencodeRunnerError."""
+        raw = """\
+{
+  "target": {"project_id": "p", "item_id": "i", "task_id": "t", "new_task": true, "task_title": ""},
+  "confidence": 0.9,
+  "reason": "new task",
+  "event": {"task_id": "t", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"}
+}
+"""
+        with self.assertRaises(OpencodeRunnerError):
+            parse_archivist_output(raw, "event-1")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -31,9 +31,10 @@ updated: 2026-06-29
 
 ## Attachments
 
-- path: attachments/2026-06-29/baseline.png
-- related_task_id: kv-cache-blockers
-- note: Existing archived image.
+- 2026-06-29T00:00:00+00:00
+  - path: attachments/2026-06-29/baseline.png
+  - related_task_id: kv-cache-blockers
+  - note: Existing archived image.
 
 ## Timeline
 

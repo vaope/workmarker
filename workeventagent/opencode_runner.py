@@ -52,6 +52,9 @@ def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
 
     target = data["target"]
 
+    if target.get("new_task") and not target.get("task_title", "").strip():
+        raise OpencodeRunnerError("task_title is required when new_task is true")
+
     proposal = ArchiveProposal(
         target=TargetRef(
             project_id=target["project_id"],

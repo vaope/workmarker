@@ -87,8 +87,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("20260629-153000123-kv-cache-blockers", updated)
         self.assertIn("Map current inference chain.", updated)
-        self.assertIn("- path: attachments/baseline.png", updated)
-        self.assertIn("- related_task_id: kv-cache-blockers", updated)
+        self.assertIn("  - path: attachments/baseline.png", updated)
+        self.assertIn("  - related_task_id: kv-cache-blockers", updated)
         self.assertEqual(task["next_action"], "Map current inference chain.")
 
     @patch("workeventagent.cli.edit_proposal_with_editor")

@@ -145,8 +145,11 @@ class ProjectDocument:
         )
 
     @staticmethod
-    def append_attachments(body: str, proposal: ArchiveProposal) -> str:
-        """Append attachment path records to ## Attachments section (MVP minimal persistence)."""
+    def append_attachments(body: str, proposal: ArchiveProposal, now: "datetime | None" = None) -> str:
+        """Append attachment path records to ## Attachments section (MVP minimal persistence).
+
+        Format follows schema: timestamp line + indented sub-items.
+        """
         if not proposal.attachment_paths:
             return body
 
@@ -154,13 +157,18 @@ class ProjectDocument:
         if not attach_match:
             return body  # no section yet — skip rather than create (MVP)
 
+        if now is None:
+            now = datetime.now(timezone.utc)
+        ts = now.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
         insert_pos = attach_match.end()
         entries = ""
         for path in proposal.attachment_paths:
             entries += (
-                f"- path: {path}\n"
-                f"- related_task_id: {proposal.target.task_id}\n"
-                f"- note: \n\n"
+                f"- {ts}\n"
+                f"  - path: {path}\n"
+                f"  - related_task_id: {proposal.target.task_id}\n"
+                f"  - note: \n\n"
             )
         return body[:insert_pos] + entries + body[insert_pos:]
 
