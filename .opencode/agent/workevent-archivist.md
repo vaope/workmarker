@@ -19,6 +19,7 @@ Required JSON shape:
     "project_id": "string",
     "item_id": "string",
     "task_id": "string",
+    "task_title": "string (required for new_item or new_task)",
     "new_item": false,
     "new_task": false
   },
@@ -31,6 +32,8 @@ Required JSON shape:
     "status": "in_progress",
     "next_action": "string"
   },
-  "attachment_paths": [],
-  "markdown_preview": "string"
+  "attachment_paths": []
 }
+
+Do NOT output `markdown_preview` or `event_id` — the wrapper owns Markdown rendering
+and event ID generation deterministically.
