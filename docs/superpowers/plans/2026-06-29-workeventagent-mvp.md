@@ -30,6 +30,7 @@ created: 2026-06-29
 - Images/files are archived as paths only; no image understanding in MVP.
 - MVP assumes a single writer per project document.
 - Daily/weekly rollup auto-generation is not in MVP.
+- Task 0 opencode spike must pass before implementing package modules.
 
 ---
 
@@ -45,8 +46,129 @@ created: 2026-06-29
 - Create `workeventagent/confirm.py`: terminal confirmation card rendering and `confirm/edit/cancel` parsing.
 - Create `workeventagent/cli.py`: command entry point for capture and dry-run.
 - Create `.opencode/agent/workevent-archivist.md`: opencode agent instructions constrained by `WORKLOG_SCHEMA.md`.
+- Create `spikes/f001-opencode-project.md`: minimal project doc used to verify real opencode behavior.
+- Create `spikes/f001-opencode-input.txt`: golden input used by the opencode spike.
+- Create `spikes/f001-opencode-output.json`: captured opencode JSON output from the spike.
 - Create `tests/fixtures/multimodal-labeling.md`: sample project document.
 - Create `tests/test_ids.py`, `tests/test_markdown_store.py`, `tests/test_index_store.py`, `tests/test_confirm.py`, `tests/test_opencode_runner.py`, `tests/test_cli.py`.
+
+## Task 0: Real opencode Contract Spike
+
+**Files:**
+- Create: `.opencode/agent/workevent-archivist.md`
+- Create: `spikes/f001-opencode-project.md`
+- Create: `spikes/f001-opencode-input.txt`
+- Create: `spikes/f001-opencode-output.json`
+
+**Interfaces:**
+- Produces: confirmed opencode command shape for Task 6.
+- Produces: JSON contract with keys `target`, `confidence`, `reason`, `event`, `attachment_paths`, `markdown_preview`.
+
+- [ ] **Step 1: Create the minimal archivist agent**
+
+```md
+---
+description: WorkEventAgent archivist spike
+mode: primary
+tools:
+  read: true
+  write: false
+  edit: false
+  bash: false
+---
+
+You are the WorkEventAgent archivist.
+
+Read the project document passed through --file.
+Return JSON only. Do not write files.
+
+Required JSON shape:
+{
+  "target": {
+    "project_id": "string",
+    "item_id": "string",
+    "task_id": "string",
+    "new_item": false,
+    "new_task": false
+  },
+  "confidence": 0.0,
+  "reason": "string",
+  "event": {
+    "event_id": "string",
+    "task_id": "string",
+    "input_text": "string",
+    "summary": "string",
+    "status": "in_progress",
+    "next_action": "string"
+  },
+  "attachment_paths": [],
+  "markdown_preview": "string"
+}
+```
+
+- [ ] **Step 2: Create the spike project and input**
+
+```md
+---
+project_id: multimodal-labeling
+title: Multimodal Labeling System
+doc_kind: work_project
+created: 2026-06-29
+updated: 2026-06-29
+---
+
+# Multimodal Labeling System
+
+## Current Snapshot
+
+## Work Map
+
+### Item: KV cache few-shot optimization <!-- item:kv-cache-few-shot -->
+#### Task: Review current blockers <!-- task:kv-cache-blockers -->
+- status: in_progress
+- next_action: Review current blocker list.
+- last_event_id:
+
+## Decisions
+
+## Attachments
+
+## Timeline
+
+## Daily / Weekly Rollups
+```
+
+```text
+Reviewed blockers for KV cache few-shot optimization today. The main issue is unclear prefix reuse strategy. Next step is to map the current inference chain.
+```
+
+- [ ] **Step 3: Run real opencode once**
+
+Run:
+
+```powershell
+$inputText = Get-Content -Raw spikes/f001-opencode-input.txt
+opencode run --agent workevent-archivist --file spikes/f001-opencode-project.md --format json "Archive this update: $inputText" > spikes/f001-opencode-output.json
+```
+
+Expected: exit code `0` and `spikes/f001-opencode-output.json` contains valid JSON. If `--agent`, `--file`, or `--format json` fails, stop and update this plan before implementing Python modules.
+
+- [ ] **Step 4: Validate JSON shape**
+
+Run:
+
+```powershell
+python -c "import json, pathlib; data=json.loads(pathlib.Path('spikes/f001-opencode-output.json').read_text(encoding='utf-8')); assert {'target','confidence','reason','event','attachment_paths','markdown_preview'} <= data.keys(); assert {'project_id','item_id','task_id'} <= data['target'].keys(); assert {'event_id','task_id','input_text','summary','status','next_action'} <= data['event'].keys()"
+```
+
+Expected: exit code `0`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add .opencode/agent/workevent-archivist.md spikes/f001-opencode-project.md spikes/f001-opencode-input.txt spikes/f001-opencode-output.json
+git commit -m "test: verify opencode archivist contract" -m "Why: Prove the real opencode CLI contract before building wrapper modules." -m "[宪宪/GPT-5.5🐾]"
+```
 
 ## Task 1: Python Package Skeleton and Fixture
 
@@ -92,9 +214,6 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'workeventagent'`.
 name = "workeventagent"
 version = "0.1.0"
 requires-python = ">=3.11"
-
-[tool.unittest]
-start-dir = "tests"
 ```
 
 ```python
@@ -103,7 +222,6 @@ __all__ = []
 ```
 
 ```md
-<!-- tests/fixtures/multimodal-labeling.md -->
 ---
 project_id: multimodal-labeling
 title: Multimodal Labeling System
@@ -126,9 +244,20 @@ updated: 2026-06-29
 - next_action: Review current blocker list.
 - last_event_id:
 
+#### Task: Read KV cache fundamentals <!-- task:kv-cache-fundamentals -->
+- status: in_progress
+- next_action: Read current architecture notes.
+- last_event_id:
+
 ## Decisions
 
+- Keep current few-shot baseline until blocker review is complete.
+
 ## Attachments
+
+- path: attachments/2026-06-29/baseline.png
+- related_task_id: kv-cache-blockers
+- note: Existing archived image.
 
 ## Timeline
 
@@ -157,6 +286,7 @@ git commit -m "chore: scaffold WorkEventAgent package" -m "Why: Establish a test
 
 **Interfaces:**
 - Produces: `make_stable_id(title: str) -> str`
+- Produces: `make_unique_stable_id(title: str, existing: set[str]) -> str`
 - Produces: `make_event_id(now: datetime, task_id: str, existing: set[str]) -> str`
 - Produces: dataclasses `ArchiveProposal`, `TimelineEvent`, `TargetRef`, `ConfirmationDecision`
 
@@ -167,13 +297,17 @@ git commit -m "chore: scaffold WorkEventAgent package" -m "Why: Establish a test
 import unittest
 from datetime import datetime, timezone
 
-from workeventagent.ids import make_event_id, make_stable_id
+from workeventagent.ids import make_event_id, make_stable_id, make_unique_stable_id
 
 
 class IdTest(unittest.TestCase):
     def test_stable_id_normalizes_titles(self):
         self.assertEqual(make_stable_id("KV Cache Few Shot"), "kv-cache-few-shot")
         self.assertEqual(make_stable_id("  Review   Blockers  "), "review-blockers")
+
+    def test_unique_stable_id_adds_suffix_on_collision(self):
+        existing = {"kv-cache-few-shot", "kv-cache-few-shot-2"}
+        self.assertEqual(make_unique_stable_id("KV Cache Few Shot", existing), "kv-cache-few-shot-3")
 
     def test_event_id_uses_milliseconds_and_suffix(self):
         now = datetime(2026, 6, 29, 15, 30, 0, 123000, tzinfo=timezone.utc)
@@ -208,6 +342,16 @@ def make_stable_id(title: str) -> str:
     lowered = title.strip().lower()
     normalized = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
     return normalized or "untitled"
+
+
+def make_unique_stable_id(title: str, existing: set[str]) -> str:
+    base = make_stable_id(title)
+    if base not in existing:
+        return base
+    suffix = 2
+    while f"{base}-{suffix}" in existing:
+        suffix += 1
+    return f"{base}-{suffix}"
 
 
 def make_event_id(now: datetime, task_id: str, existing: set[str]) -> str:
@@ -293,15 +437,17 @@ git commit -m "feat: add worklog IDs and proposal models" -m "Why: Give Markdown
 - Produces: `ProjectDocument.from_text(text: str) -> ProjectDocument`
 - Produces: `ProjectDocument.apply_proposal(proposal: ArchiveProposal) -> str`
 - Produces: `ProjectDocument.insert_new_task(proposal: ArchiveProposal) -> str`
+- Produces: `write_project_atomically(path: Path, text: str) -> None`
 
 - [ ] **Step 1: Write failing tests for anchored task update, timeline append, and new task insertion**
 
 ```python
 # tests/test_markdown_store.py
 import unittest
+import tempfile
 from pathlib import Path
 
-from workeventagent.markdown_store import ProjectDocument
+from workeventagent.markdown_store import ProjectDocument, write_project_atomically
 from workeventagent.models import ArchiveProposal, TargetRef, TimelineEvent
 
 
@@ -337,6 +483,9 @@ class MarkdownStoreTest(unittest.TestCase):
         self.assertIn("last_event_id: 20260629-153000123-kv-cache-blockers", updated)
         self.assertIn("Map current inference chain.", updated)
         self.assertIn("<!-- event:20260629-153000123-kv-cache-blockers -->", updated)
+        self.assertIn("#### Task: Read KV cache fundamentals <!-- task:kv-cache-fundamentals -->", updated)
+        self.assertIn("Keep current few-shot baseline until blocker review is complete.", updated)
+        self.assertIn("attachments/2026-06-29/baseline.png", updated)
 
     def test_new_task_requires_new_task_marker(self):
         doc = ProjectDocument.from_text(FIXTURE.read_text(encoding="utf-8"))
@@ -344,6 +493,15 @@ class MarkdownStoreTest(unittest.TestCase):
 
         self.assertIn("<!-- task:kv-cache-blockers-2 -->", updated)
         self.assertIn("#### Task: Review blocker details", updated)
+
+    def test_atomic_write_replaces_whole_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "project.md"
+            path.write_text("old", encoding="utf-8")
+
+            write_project_atomically(path, "new")
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "new")
 
 
 if __name__ == "__main__":
@@ -365,6 +523,7 @@ Implement exact behavior:
 - replace only the target task block until the next `#### Task:`, `### Item:`, or `## `
 - append timeline events under `## Timeline`
 - insert new task under the matching item anchor when `proposal.target.new_task` is true
+- write project files with a same-directory temporary file and `os.replace`
 - raise `ValueError` if project ID, item anchor, or task anchor is missing
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -411,6 +570,7 @@ class IndexStoreTest(unittest.TestCase):
 
             init_db(db_path)
             rebuild_index(db_path, [project_path])
+            rebuild_index(db_path, [project_path])
             task = get_task(db_path, "kv-cache-blockers")
 
             self.assertEqual(task["project_id"], "multimodal-labeling")
@@ -436,7 +596,7 @@ Create tables:
 - `tasks(task_id primary key, project_id, item_id, title, status, next_action, doc_path, doc_anchor, last_event_id)`
 - `attachments(path primary key, project_id, task_id, note)`
 
-Parse Work Map anchors and nearby `status`, `next_action`, `last_event_id` lines. Use Timeline only for history fields introduced in later tasks.
+Parse Work Map anchors and nearby `status`, `next_action`, `last_event_id` lines. This task does not create a separate timeline-history table. Rebuild must be idempotent: delete indexed rows for scanned project IDs before inserting, or use `INSERT OR REPLACE` consistently.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -461,6 +621,7 @@ git commit -m "feat: add rebuildable SQLite index" -m "Why: Keep task lookup fas
 - Consumes: `ArchiveProposal`
 - Produces: `render_confirmation_card(proposal: ArchiveProposal) -> str`
 - Produces: `parse_confirmation_input(raw: str) -> ConfirmationDecision`
+- Produces: `edit_proposal_with_editor(proposal: ArchiveProposal, editor: str) -> ArchiveProposal`
 
 - [ ] **Step 1: Write failing confirmation tests**
 
@@ -492,6 +653,10 @@ class ConfirmTest(unittest.TestCase):
         self.assertEqual(parse_confirmation_input("confirm").kind, "confirm")
         self.assertEqual(parse_confirmation_input("edit").kind, "edit")
         self.assertEqual(parse_confirmation_input("cancel").kind, "cancel")
+        self.assertEqual(parse_confirmation_input("").kind, "cancel")
+        self.assertEqual(parse_confirmation_input("CONFIRM").kind, "cancel")
+        self.assertEqual(parse_confirmation_input("y").kind, "cancel")
+        self.assertEqual(parse_confirmation_input("???").kind, "cancel")
 
 
 if __name__ == "__main__":
@@ -506,7 +671,7 @@ Expected: FAIL with missing `workeventagent.confirm`.
 
 - [ ] **Step 3: Implement renderer and parser**
 
-The renderer must include target IDs, confidence, reason, new item/task flags, timeline preview, attachment paths, and Markdown block preview.
+The renderer must include target IDs, confidence, reason, new item/task flags, timeline preview, attachment paths, and Markdown block preview. Unknown confirmation input must return `cancel`. `edit_proposal_with_editor` must serialize the proposal to a temporary JSON file, run the configured editor, reload JSON, validate the proposal shape, and return the edited proposal for another confirmation render.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -525,11 +690,13 @@ git commit -m "feat: add terminal confirmation cards" -m "Why: Require explicit 
 
 **Files:**
 - Create: `workeventagent/opencode_runner.py`
-- Create: `.opencode/agent/workevent-archivist.md`
+- Modify: `.opencode/agent/workevent-archivist.md`
 - Test: `tests/test_opencode_runner.py`
 
 **Interfaces:**
 - Produces: `run_archivist(prompt: str, project_doc: Path, opencode_bin: str = "opencode") -> str`
+- Produces: `parse_archivist_output(raw: str) -> ArchiveProposal`
+- Produces: exception `OpencodeRunnerError`
 - Consumes: opencode CLI output as JSON proposal text
 
 - [ ] **Step 1: Write failing subprocess command test**
@@ -540,7 +707,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from workeventagent.opencode_runner import run_archivist
+from workeventagent.opencode_runner import OpencodeRunnerError, parse_archivist_output, run_archivist
 
 
 class OpencodeRunnerTest(unittest.TestCase):
@@ -558,6 +725,21 @@ class OpencodeRunnerTest(unittest.TestCase):
         self.assertIn("--agent", args)
         self.assertIn("workevent-archivist", args)
         self.assertIn("--file", args)
+
+    @patch("workeventagent.opencode_runner.subprocess.run")
+    def test_run_archivist_raises_on_nonzero_exit(self, run):
+        run.return_value.stdout = ""
+        run.return_value.stderr = "bad flag"
+        run.return_value.returncode = 2
+
+        with self.assertRaises(OpencodeRunnerError):
+            run_archivist("input", Path("project.md"), opencode_bin="opencode")
+
+    def test_parse_archivist_output_rejects_empty_or_invalid_json(self):
+        with self.assertRaises(OpencodeRunnerError):
+            parse_archivist_output("")
+        with self.assertRaises(OpencodeRunnerError):
+            parse_archivist_output("{not json")
 
 
 if __name__ == "__main__":
@@ -579,6 +761,12 @@ Agent file requirements:
 - never write files directly
 - propose Markdown changes only
 - ask for clarification when project/item/task target is uncertain
+
+Runner requirements:
+
+- check `subprocess.run(...).returncode`
+- raise `OpencodeRunnerError` for non-zero exit, empty stdout, invalid JSON, or missing required keys
+- convert valid JSON into `ArchiveProposal`
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -613,6 +801,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from workeventagent.cli import main
+from workeventagent.index_store import get_task
 
 
 class CliTest(unittest.TestCase):
@@ -635,6 +824,57 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(code, 0)
 
+    @patch("workeventagent.cli.input", return_value="confirm")
+    @patch("workeventagent.cli.run_archivist")
+    def test_capture_confirmed_write_updates_markdown_and_sqlite(self, run_archivist, input_mock):
+        run_archivist.return_value = """
+{
+  "target": {"project_id": "multimodal-labeling", "item_id": "kv-cache-few-shot", "task_id": "kv-cache-blockers"},
+  "confidence": 0.91,
+  "reason": "Matched KV cache item",
+  "event": {"event_id": "20260629-153000123-kv-cache-blockers", "task_id": "kv-cache-blockers", "input_text": "Reviewed blockers for KV cache few-shot optimization today.", "summary": "Prefix reuse strategy is unclear.", "status": "in_progress", "next_action": "Map current inference chain."},
+  "attachment_paths": [],
+  "markdown_preview": ""
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            db = Path(tmp) / "index.sqlite"
+            project.write_text(Path("tests/fixtures/multimodal-labeling.md").read_text(encoding="utf-8"), encoding="utf-8")
+
+            code = main(["capture", "--project", str(project), "--db", str(db), "--text", "Reviewed blockers for KV cache few-shot optimization today."])
+            updated = project.read_text(encoding="utf-8")
+            task = get_task(db, "kv-cache-blockers")
+
+        self.assertEqual(code, 0)
+        self.assertIn("20260629-153000123-kv-cache-blockers", updated)
+        self.assertIn("Map current inference chain.", updated)
+        self.assertEqual(task["next_action"], "Map current inference chain.")
+
+    @patch("workeventagent.cli.edit_proposal_with_editor")
+    @patch("workeventagent.cli.input", side_effect=["edit", "confirm"])
+    @patch("workeventagent.cli.run_archivist")
+    def test_capture_edit_reconfirms_before_write(self, run_archivist, input_mock, edit_mock):
+        run_archivist.return_value = """
+{
+  "target": {"project_id": "multimodal-labeling", "item_id": "kv-cache-few-shot", "task_id": "kv-cache-blockers"},
+  "confidence": 0.91,
+  "reason": "Matched KV cache item",
+  "event": {"event_id": "20260629-153000123-kv-cache-blockers", "task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
+  "attachment_paths": [],
+  "markdown_preview": ""
+}
+"""
+        edit_mock.side_effect = lambda proposal: proposal
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            project.write_text(Path("tests/fixtures/multimodal-labeling.md").read_text(encoding="utf-8"), encoding="utf-8")
+            code = main(["capture", "--project", str(project), "--db", str(Path(tmp) / "index.sqlite"), "--text", "input"])
+
+        self.assertEqual(code, 0)
+        edit_mock.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -654,7 +894,9 @@ CLI behavior:
 - without `--dry-run`, prompt for `confirm`, `edit`, or `cancel`.
 - `confirm` writes Markdown, then updates SQLite.
 - `cancel` exits with code `2`.
-- `edit` exits with code `3` in MVP and prints that interactive edit is a later task.
+- `edit` opens the proposal editor, reloads the edited proposal, and renders confirmation again before any write.
+- Markdown writes use `write_project_atomically`.
+- Confirmed write tests must assert Markdown content changed and SQLite can read the updated task.
 
 - [ ] **Step 4: Run all tests**
 
@@ -736,12 +978,15 @@ git commit -m "docs: add WorkEventAgent MVP usage" -m "Why: Document how to veri
 
 Spec coverage:
 
+- Real opencode contract: Task 0.
 - Capture loop: Task 7.
 - opencode boundary: Task 6.
 - Terminal confirmation: Task 5 and Task 7.
-- Markdown source of truth: Task 3.
-- SQLite rebuildable index: Task 4.
+- Markdown source of truth: Task 3, including atomic writes and sibling-block preservation.
+- SQLite rebuildable index: Task 4, including idempotent rebuild.
 - Strong-confirmed item/task creation: Task 3 and Task 5.
+- Confirmed-write path: Task 7.
+- Golden end-to-end behavior: Task 7.
 - Attachments as paths only: model support in Task 2, display in Task 5; file copying can be added after base capture loop passes.
 - Correction events: schema documented; implementation can be added after initial update flow unless co-creator prioritizes correction before first MVP run.
 

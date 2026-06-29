@@ -146,6 +146,8 @@ The card must show:
 - Attachment paths to archive.
 - Exact file path and anchor that will be changed.
 
+`edit` opens the structured proposal for user modification, then re-renders the confirmation card. No write occurs until the edited proposal is confirmed.
+
 If the target project, item, or task is uncertain, the agent must ask a question instead of writing.
 
 ## Item and Task Creation Policy
@@ -180,7 +182,7 @@ MVP assumes a single writer per project document. Parallel `opencode run` sessio
 ## Acceptance Criteria
 
 - [ ] AC-1: A user can submit a free-form text update and receive a structured archive proposal.
-- [ ] AC-2: The proposal can be confirmed, edited, or canceled before any write.
+- [ ] AC-2: The proposal can be confirmed, edited and re-confirmed, or canceled before any write.
 - [ ] AC-3: Confirmed updates append a Timeline event and update only the targeted Work Map task block.
 - [ ] AC-4: Current Snapshot can be regenerated and is never treated as authoritative history.
 - [ ] AC-5: SQLite can be rebuilt from project Markdown documents.

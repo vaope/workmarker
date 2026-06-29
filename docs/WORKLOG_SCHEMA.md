@@ -93,7 +93,7 @@ Before writing, the agent must show a proposal with:
 - attachment paths
 - changed file path and anchor
 
-The user must choose `confirm`, `edit`, or `cancel`.
+The user must choose `confirm`, `edit`, or `cancel`. `edit` modifies the proposal and returns to confirmation; it must not write.
 
 If the proposal creates a new item or task, it must show `new_item` or `new_task`, the generated stable ID, the target parent, and the exact Markdown block to insert. The write is allowed only after explicit user confirmation.
 
