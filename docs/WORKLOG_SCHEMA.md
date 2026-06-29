@@ -95,7 +95,7 @@ Before writing, the agent must show a proposal with:
 
 The user must choose `confirm`, `edit`, or `cancel`.
 
-If the proposal creates a new item or task, it must show `new_item` or `new_task`, the generated stable ID, and the exact Markdown block to insert. This behavior is gated by the F001 item/task creation decision.
+If the proposal creates a new item or task, it must show `new_item` or `new_task`, the generated stable ID, the target parent, and the exact Markdown block to insert. The write is allowed only after explicit user confirmation.
 
 ## Ambiguity Rules
 

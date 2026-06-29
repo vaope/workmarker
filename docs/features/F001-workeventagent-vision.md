@@ -148,16 +148,17 @@ The card must show:
 
 If the target project, item, or task is uncertain, the agent must ask a question instead of writing.
 
-## Item and Task Creation Decision
+## Item and Task Creation Policy
 
-Project creation is out of scope for the agent. Item/task creation is still a product decision and blocks implementation planning.
+Project creation is out of scope for the agent. Item/task creation uses option B: the agent may propose a new item/task in the confirmation card, but the write occurs only after explicit user confirmation.
 
-Options:
+The confirmation card must show:
 
-- A: archive only to existing items/tasks. If no target exists, ask the user to create it manually.
-- B: allow the agent to propose a new item/task in the confirmation card. The write occurs only after explicit user confirmation, with generated stable IDs shown before write.
-
-Recommendation: B with strong confirmation. It preserves the low-friction goal while preventing silent structure creation.
+- `new_item` or `new_task`
+- generated stable IDs
+- target parent project/item
+- exact Markdown block to insert
+- timeline event that will be appended
 
 ## Correction Protocol
 
@@ -186,7 +187,7 @@ MVP assumes a single writer per project document. Parallel `opencode run` sessio
 - [ ] AC-6: Attachments are archived by path without image understanding.
 - [ ] AC-7: No new project is created by the agent without explicit manual setup.
 - [ ] AC-8: Golden examples verify expected Markdown and SQLite changes.
-- [ ] AC-9: Implementation planning does not start until item/task creation policy is selected.
+- [ ] AC-9: New item/task proposals require explicit confirmation with generated IDs and exact Markdown insertion preview.
 
 ## Golden Examples
 
@@ -251,8 +252,7 @@ Mitigations:
 ## Open Questions
 
 - What is the exact project folder layout for user-created projects?
-- What local wrapper language/runtime is acceptable in the company environment?
-- Should the agent be allowed to propose new items/tasks in the confirmation card?
+- Confirm Python 3.11 standard-library wrapper is acceptable in the company environment.
 - What line-count or event-count threshold should trigger item page splitting later?
 
 ## Next Action
