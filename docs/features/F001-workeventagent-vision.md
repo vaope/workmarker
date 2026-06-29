@@ -108,6 +108,8 @@ Event IDs must include enough entropy to avoid collision. Recommended format:
 
 `YYYYMMDD-HHMMSSmmm-task-id` with a numeric suffix if more than one event occurs in the same millisecond.
 
+The wrapper owns event ID generation. Agent output may suggest event content, but it must not be trusted as the source of `event_id`.
+
 ## SQLite Role
 
 SQLite is an index and cache, not the source of truth.

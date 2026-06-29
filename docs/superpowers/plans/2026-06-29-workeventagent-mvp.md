@@ -94,7 +94,6 @@ Required JSON shape:
   "confidence": 0.0,
   "reason": "string",
   "event": {
-    "event_id": "string",
     "task_id": "string",
     "input_text": "string",
     "summary": "string",
@@ -158,7 +157,7 @@ Expected: exit code `0` and `spikes/f001-opencode-output.json` contains valid JS
 Run:
 
 ```powershell
-python -c "import json, pathlib; data=json.loads(pathlib.Path('spikes/f001-opencode-output.json').read_text(encoding='utf-8')); assert {'target','confidence','reason','event','attachment_paths','markdown_preview'} <= data.keys(); assert {'project_id','item_id','task_id'} <= data['target'].keys(); assert {'event_id','task_id','input_text','summary','status','next_action'} <= data['event'].keys()"
+python -c "import json, pathlib; data=json.loads(pathlib.Path('spikes/f001-opencode-output.json').read_text(encoding='utf-8')); assert {'target','confidence','reason','event','attachment_paths','markdown_preview'} <= data.keys(); assert {'project_id','item_id','task_id'} <= data['target'].keys(); assert {'task_id','input_text','summary','status','next_action'} <= data['event'].keys(); assert 'event_id' not in data['event']"
 ```
 
 Expected: exit code `0`.
@@ -435,7 +434,7 @@ git commit -m "feat: add worklog IDs and proposal models" -m "Why: Give Markdown
 **Interfaces:**
 - Consumes: `ArchiveProposal`, `TimelineEvent`
 - Produces: `ProjectDocument.from_text(text: str) -> ProjectDocument`
-- Produces: `ProjectDocument.apply_proposal(proposal: ArchiveProposal) -> str`
+- Produces: `ProjectDocument.apply_proposal(proposal: ArchiveProposal, updated_date: str) -> str`
 - Produces: `ProjectDocument.insert_new_task(proposal: ArchiveProposal) -> str`
 - Produces: `write_project_atomically(path: Path, text: str) -> None`
 
@@ -478,11 +477,12 @@ class MarkdownStoreTest(unittest.TestCase):
 
     def test_apply_existing_task_updates_block_and_appends_timeline(self):
         doc = ProjectDocument.from_text(FIXTURE.read_text(encoding="utf-8"))
-        updated = doc.apply_proposal(self.proposal())
+        updated = doc.apply_proposal(self.proposal(), updated_date="2026-06-30")
 
         self.assertIn("last_event_id: 20260629-153000123-kv-cache-blockers", updated)
         self.assertIn("Map current inference chain.", updated)
         self.assertIn("<!-- event:20260629-153000123-kv-cache-blockers -->", updated)
+        self.assertIn("updated: 2026-06-30", updated)
         self.assertIn("#### Task: Read KV cache fundamentals <!-- task:kv-cache-fundamentals -->", updated)
         self.assertIn("Keep current few-shot baseline until blocker review is complete.", updated)
         self.assertIn("attachments/2026-06-29/baseline.png", updated)
@@ -523,6 +523,7 @@ Implement exact behavior:
 - replace only the target task block until the next `#### Task:`, `### Item:`, or `## `
 - append timeline events under `## Timeline`
 - insert new task under the matching item anchor when `proposal.target.new_task` is true
+- update frontmatter `updated:` with the write date
 - write project files with a same-directory temporary file and `os.replace`
 - raise `ValueError` if project ID, item anchor, or task anchor is missing
 
@@ -651,10 +652,10 @@ class ConfirmTest(unittest.TestCase):
 
     def test_parse_confirmation_input(self):
         self.assertEqual(parse_confirmation_input("confirm").kind, "confirm")
+        self.assertEqual(parse_confirmation_input(" CONFIRM ").kind, "confirm")
         self.assertEqual(parse_confirmation_input("edit").kind, "edit")
         self.assertEqual(parse_confirmation_input("cancel").kind, "cancel")
         self.assertEqual(parse_confirmation_input("").kind, "cancel")
-        self.assertEqual(parse_confirmation_input("CONFIRM").kind, "cancel")
         self.assertEqual(parse_confirmation_input("y").kind, "cancel")
         self.assertEqual(parse_confirmation_input("???").kind, "cancel")
 
@@ -671,7 +672,7 @@ Expected: FAIL with missing `workeventagent.confirm`.
 
 - [ ] **Step 3: Implement renderer and parser**
 
-The renderer must include target IDs, confidence, reason, new item/task flags, timeline preview, attachment paths, and Markdown block preview. Unknown confirmation input must return `cancel`. `edit_proposal_with_editor` must serialize the proposal to a temporary JSON file, run the configured editor, reload JSON, validate the proposal shape, and return the edited proposal for another confirmation render.
+The renderer must include target IDs, confidence, reason, new item/task flags, timeline preview, attachment paths, and Markdown block preview. Confirmation parsing must strip whitespace and lowercase known commands; unknown input must return `cancel`. `edit_proposal_with_editor` must serialize the proposal to a temporary JSON file, run the configured editor, reload JSON, validate the proposal shape, and return the edited proposal for another confirmation render.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -695,7 +696,7 @@ git commit -m "feat: add terminal confirmation cards" -m "Why: Require explicit 
 
 **Interfaces:**
 - Produces: `run_archivist(prompt: str, project_doc: Path, opencode_bin: str = "opencode") -> str`
-- Produces: `parse_archivist_output(raw: str) -> ArchiveProposal`
+- Produces: `parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal`
 - Produces: exception `OpencodeRunnerError`
 - Consumes: opencode CLI output as JSON proposal text
 
@@ -737,9 +738,24 @@ class OpencodeRunnerTest(unittest.TestCase):
 
     def test_parse_archivist_output_rejects_empty_or_invalid_json(self):
         with self.assertRaises(OpencodeRunnerError):
-            parse_archivist_output("")
+            parse_archivist_output("", "event-1")
         with self.assertRaises(OpencodeRunnerError):
-            parse_archivist_output("{not json")
+            parse_archivist_output("{not json", "event-1")
+
+    def test_parse_archivist_output_uses_wrapper_event_id(self):
+        raw = """
+{
+  "target": {"project_id": "multimodal-labeling", "item_id": "kv-cache-few-shot", "task_id": "kv-cache-blockers"},
+  "confidence": 0.91,
+  "reason": "Matched KV cache item",
+  "event": {"event_id": "agent-must-not-own-this", "task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
+  "attachment_paths": [],
+  "markdown_preview": ""
+}
+"""
+        proposal = parse_archivist_output(raw, "wrapper-event-id")
+
+        self.assertEqual(proposal.event.event_id, "wrapper-event-id")
 
 
 if __name__ == "__main__":
@@ -767,6 +783,8 @@ Runner requirements:
 - check `subprocess.run(...).returncode`
 - raise `OpencodeRunnerError` for non-zero exit, empty stdout, invalid JSON, or missing required keys
 - convert valid JSON into `ArchiveProposal`
+- set `ArchiveProposal.event.event_id` from the wrapper-generated `event_id` argument
+- ignore any `event.event_id` field returned by the agent
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -789,7 +807,8 @@ git commit -m "feat: add opencode archivist runner" -m "Why: Keep LLM proposal g
 
 **Interfaces:**
 - Consumes: previous modules
-- Produces: `python -m workeventagent.cli capture --project docs/project.md --db workeventagent.sqlite --text "..."`
+- Produces: `python -m workeventagent.cli capture --project docs/project.md --db workeventagent.sqlite --text "..." --attach path/to/image.png`
+- Produces: `main(argv: list[str], now: datetime | None = None) -> int`
 
 - [ ] **Step 1: Write failing dry-run CLI test**
 
@@ -797,6 +816,7 @@ git commit -m "feat: add opencode archivist runner" -m "Why: Keep LLM proposal g
 # tests/test_cli.py
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -812,7 +832,7 @@ class CliTest(unittest.TestCase):
   "target": {"project_id": "multimodal-labeling", "item_id": "kv-cache-few-shot", "task_id": "kv-cache-blockers"},
   "confidence": 0.91,
   "reason": "Matched KV cache item",
-  "event": {"event_id": "20260629-153000123-kv-cache-blockers", "task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
+  "event": {"task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
   "attachment_paths": [],
   "markdown_preview": ""
 }
@@ -832,17 +852,20 @@ class CliTest(unittest.TestCase):
   "target": {"project_id": "multimodal-labeling", "item_id": "kv-cache-few-shot", "task_id": "kv-cache-blockers"},
   "confidence": 0.91,
   "reason": "Matched KV cache item",
-  "event": {"event_id": "20260629-153000123-kv-cache-blockers", "task_id": "kv-cache-blockers", "input_text": "Reviewed blockers for KV cache few-shot optimization today.", "summary": "Prefix reuse strategy is unclear.", "status": "in_progress", "next_action": "Map current inference chain."},
-  "attachment_paths": [],
+  "event": {"task_id": "kv-cache-blockers", "input_text": "Reviewed blockers for KV cache few-shot optimization today.", "summary": "Prefix reuse strategy is unclear.", "status": "in_progress", "next_action": "Map current inference chain."},
+  "attachment_paths": ["attachments/baseline.png"],
   "markdown_preview": ""
 }
 """
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "project.md"
             db = Path(tmp) / "index.sqlite"
+            attachment = Path(tmp) / "baseline.png"
+            attachment.write_bytes(b"not-analyzed")
             project.write_text(Path("tests/fixtures/multimodal-labeling.md").read_text(encoding="utf-8"), encoding="utf-8")
 
-            code = main(["capture", "--project", str(project), "--db", str(db), "--text", "Reviewed blockers for KV cache few-shot optimization today."])
+            fixed_now = datetime(2026, 6, 29, 15, 30, 0, 123000, tzinfo=timezone.utc)
+            code = main(["capture", "--project", str(project), "--db", str(db), "--text", "Reviewed blockers for KV cache few-shot optimization today.", "--attach", str(attachment)], now=fixed_now)
             updated = project.read_text(encoding="utf-8")
             task = get_task(db, "kv-cache-blockers")
 
@@ -860,7 +883,7 @@ class CliTest(unittest.TestCase):
   "target": {"project_id": "multimodal-labeling", "item_id": "kv-cache-few-shot", "task_id": "kv-cache-blockers"},
   "confidence": 0.91,
   "reason": "Matched KV cache item",
-  "event": {"event_id": "20260629-153000123-kv-cache-blockers", "task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
+  "event": {"task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
   "attachment_paths": [],
   "markdown_preview": ""
 }
@@ -892,6 +915,8 @@ CLI behavior:
 
 - `--dry-run` renders the confirmation card and exits without writing.
 - without `--dry-run`, prompt for `confirm`, `edit`, or `cancel`.
+- `--attach PATH` may be repeated; paths are archived as paths only and not parsed as images.
+- before parsing agent output, collect existing Timeline event IDs and generate the next event ID with `make_event_id`.
 - `confirm` writes Markdown, then updates SQLite.
 - `cancel` exits with code `2`.
 - `edit` opens the proposal editor, reloads the edited proposal, and renders confirmation again before any write.
@@ -985,9 +1010,11 @@ Spec coverage:
 - Markdown source of truth: Task 3, including atomic writes and sibling-block preservation.
 - SQLite rebuildable index: Task 4, including idempotent rebuild.
 - Strong-confirmed item/task creation: Task 3 and Task 5.
+- Wrapper-owned event ID generation: Task 2, Task 6, and Task 7.
 - Confirmed-write path: Task 7.
 - Golden end-to-end behavior: Task 7.
-- Attachments as paths only: model support in Task 2, display in Task 5; file copying can be added after base capture loop passes.
+- Attachments as paths only: model support in Task 2, display in Task 5, and CLI `--attach` input in Task 7.
+- Frontmatter `updated:` bump: Task 3 and Task 7.
 - Correction events: schema documented; implementation can be added after initial update flow unless co-creator prioritizes correction before first MVP run.
 
 Known implementation sequencing:
