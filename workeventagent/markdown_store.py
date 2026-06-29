@@ -144,6 +144,26 @@ class ProjectDocument:
             f"- last_event_id: {event.event_id}"
         )
 
+    @staticmethod
+    def append_attachments(body: str, proposal: ArchiveProposal) -> str:
+        """Append attachment path records to ## Attachments section (MVP minimal persistence)."""
+        if not proposal.attachment_paths:
+            return body
+
+        attach_match = re.search(r"(## Attachments\s*\n)", body)
+        if not attach_match:
+            return body  # no section yet — skip rather than create (MVP)
+
+        insert_pos = attach_match.end()
+        entries = ""
+        for path in proposal.attachment_paths:
+            entries += (
+                f"- path: {path}\n"
+                f"- related_task_id: {proposal.target.task_id}\n"
+                f"- note: \n\n"
+            )
+        return body[:insert_pos] + entries + body[insert_pos:]
+
 
 def write_project_atomically(path: Path, text: str) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")

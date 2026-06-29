@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from workeventagent.confirm import edit_proposal_with_editor, parse_confirmation_input, render_confirmation_card
-from workeventagent.ids import make_event_id
+from workeventagent.ids import make_event_id, make_unique_stable_id
 from workeventagent.index_store import init_db, rebuild_index
 from workeventagent.markdown_store import ProjectDocument, write_project_atomically
 from workeventagent.opencode_runner import OpencodeRunnerError, parse_archivist_output, run_archivist
@@ -67,6 +67,18 @@ def main(argv: list[str] | None = None, now: datetime | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    # 3.5. Anti-collision: new_task must not reuse existing task_id
+    if proposal.target.new_task:
+        existing_task_ids = _collect_existing_task_ids(doc_text)
+        unique_task_id = make_unique_stable_id(proposal.target.task_title, existing_task_ids)
+        if unique_task_id != proposal.target.task_id:
+            from dataclasses import replace
+
+            new_event_id = make_event_id(now, unique_task_id, existing_event_ids)
+            new_target = replace(proposal.target, task_id=unique_task_id)
+            new_event = replace(proposal.event, event_id=new_event_id, task_id=unique_task_id)
+            proposal = replace(proposal, target=new_target, event=new_event)
+
     # 4. Confidence check — reject low-confidence proposals
     if proposal.confidence < CONFIDENCE_THRESHOLD:
         print(
@@ -116,6 +128,9 @@ def main(argv: list[str] | None = None, now: datetime | None = None) -> int:
         doc = ProjectDocument.from_text(doc_text)
         final = doc.apply_proposal(proposal, now_str)
 
+    # 7.5. Append attachment paths to ## Attachments
+    final = ProjectDocument.append_attachments(final, proposal)
+
     write_project_atomically(project_path, final)
 
     # 8. Rebuild SQLite index
@@ -138,6 +153,13 @@ def _collect_existing_event_ids(text: str) -> set[str]:
     return event_ids
 
 
+def _collect_existing_task_ids(text: str) -> set[str]:
+    task_ids: set[str] = set()
+    for m in re.finditer(r"<!--\s*task:(.+?)\s*-->", text):
+        task_ids.add(m.group(1).strip())
+    return task_ids
+
+
 def _quick_extract_task_id(raw: str) -> str:
     """Extract task_id from raw NDJSON/JSON without full validation."""
     # Try NDJSON lines first
@@ -153,13 +175,19 @@ def _quick_extract_task_id(raw: str) -> str:
             part = record.get("part", {})
             if part.get("type") == "text" and "text" in part:
                 inner = _extract_json_from_fence(part["text"])
-                data = _json.loads(inner)
-                return data.get("event", {}).get("task_id", "unknown")
+                try:
+                    data = _json.loads(inner)
+                    return data.get("event", {}).get("task_id", "unknown")
+                except _json.JSONDecodeError:
+                    continue
 
     # Fallback: treat raw as plain JSON (possibly fence-wrapped)
     inner = _extract_json_from_fence(raw)
-    data = _json.loads(inner)
-    return data.get("event", {}).get("task_id", "unknown")
+    try:
+        data = _json.loads(inner)
+        return data.get("event", {}).get("task_id", "unknown")
+    except _json.JSONDecodeError:
+        return "unknown"
 
 
 def _extract_json_from_fence(text: str) -> str:

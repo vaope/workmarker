@@ -87,6 +87,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("20260629-153000123-kv-cache-blockers", updated)
         self.assertIn("Map current inference chain.", updated)
+        self.assertIn("- path: attachments/baseline.png", updated)
+        self.assertIn("- related_task_id: kv-cache-blockers", updated)
         self.assertEqual(task["next_action"], "Map current inference chain.")
 
     @patch("workeventagent.cli.edit_proposal_with_editor")
@@ -309,6 +311,115 @@ class CliTest(unittest.TestCase):
             )
 
         self.assertEqual(code, 1)
+
+    # ── 砚砚 Task 7 退回修复 tests ──
+
+    @patch("workeventagent.cli.input", return_value="confirm")
+    @patch("workeventagent.cli.run_archivist")
+    def test_capture_new_task_collision_id_reassigned(
+        self, run_archivist, input_mock
+    ):
+        """🔴 agent gives task_id that collides with existing → wrapper assigns unique."""
+        run_archivist.return_value = """
+{
+  "target": {"project_id": "multimodal-labeling", "item_id": "kv-cache-few-shot", "task_id": "kv-cache-blockers", "task_title": "KV cache blockers", "new_task": true},
+  "confidence": 0.91,
+  "reason": "New task about blockers.",
+  "event": {"task_id": "kv-cache-blockers", "input_text": "New blockers found.", "summary": "More blockers to track.", "status": "in_progress", "next_action": "File tickets."},
+  "attachment_paths": []
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            project.write_text(
+                Path("tests/fixtures/multimodal-labeling.md").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            code = main(
+                [
+                    "capture",
+                    "--project",
+                    str(project),
+                    "--db",
+                    str(Path(tmp) / "index.sqlite"),
+                    "--text",
+                    "input",
+                ]
+            )
+            updated = project.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0)
+        # Original task_id kv-cache-blockers already in fixture → must NOT get reused
+        self.assertNotIn(
+            "#### Task: KV cache blockers <!-- task:kv-cache-blockers -->", updated
+        )
+        # Wrapper must assign a unique variant (e.g. kv-cache-blockers-2)
+        self.assertIn(
+            "#### Task: KV cache blockers <!-- task:kv-cache-blockers-2 -->", updated
+        )
+        # Verify no duplicate anchors
+        self.assertEqual(
+            updated.count("<!-- task:kv-cache-blockers -->"), 1,
+            "Existing task anchor must remain untouched",
+        )
+
+    @patch("workeventagent.cli.run_archivist")
+    def test_capture_malformed_agent_output_exits_cleanly(self, run_archivist):
+        """🟡 malformed agent text must not crash _quick_extract_task_id."""
+        run_archivist.return_value = "this is not json {{{ broken"
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            project.write_text(
+                Path("tests/fixtures/multimodal-labeling.md").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            code = main(
+                [
+                    "capture",
+                    "--project",
+                    str(project),
+                    "--db",
+                    str(Path(tmp) / "index.sqlite"),
+                    "--text",
+                    "input",
+                ]
+            )
+
+        self.assertEqual(code, 1)  # clean exit, not traceback
+
+    @patch("workeventagent.cli.run_archivist")
+    def test_capture_low_confidence_attach_paths_not_written(self, run_archivist):
+        """Attachments should NOT be written when confidence is rejected."""
+        run_archivist.return_value = """
+{
+  "target": {"project_id": "multimodal-labeling", "item_id": "kv-cache-few-shot", "task_id": "kv-cache-blockers"},
+  "confidence": 0.3,
+  "reason": "Unsure.",
+  "event": {"task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
+  "attachment_paths": ["should-not-appear.png"]
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            original = Path("tests/fixtures/multimodal-labeling.md").read_text(
+                encoding="utf-8"
+            )
+            project.write_text(original, encoding="utf-8")
+            code = main(
+                [
+                    "capture",
+                    "--project",
+                    str(project),
+                    "--db",
+                    str(Path(tmp) / "index.sqlite"),
+                    "--text",
+                    "input",
+                ]
+            )
+            updated = project.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 1)
+        self.assertEqual(updated, original)
 
 
 if __name__ == "__main__":
