@@ -45,8 +45,12 @@ def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
 
     _validate_required_keys(data)
 
-    target = data["target"]
     ev = data["event"]
+    status = ev.get("status", "in_progress")
+    if status not in ("in_progress", "done"):
+        raise OpencodeRunnerError(f"invalid status: {status!r}")
+
+    target = data["target"]
 
     proposal = ArchiveProposal(
         target=TargetRef(
@@ -64,7 +68,7 @@ def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
             task_id=ev["task_id"],
             input_text=ev["input_text"],
             summary=ev["summary"],
-            status=ev.get("status", "in_progress"),
+            status=status,
             next_action=ev.get("next_action", ""),
             event_type=ev.get("event_type", "update"),
             corrects_event_id=ev.get("corrects_event_id"),

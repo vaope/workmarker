@@ -98,6 +98,18 @@ class OpencodeRunnerTest(unittest.TestCase):
         proposal = parse_archivist_output(raw, "event-1")
         self.assertEqual(proposal.event.event_id, "event-1")
 
+    def test_parse_archivist_output_rejects_invalid_status(self):
+        raw = """\
+{
+  "target": {"project_id": "p", "item_id": "i", "task_id": "t"},
+  "confidence": 0.9,
+  "reason": "ok",
+  "event": {"task_id": "t", "input_text": "input", "summary": "summary", "status": "blocked", "next_action": "next"}
+}
+"""
+        with self.assertRaises(OpencodeRunnerError):
+            parse_archivist_output(raw, "event-1")
+
 
 if __name__ == "__main__":
     unittest.main()
