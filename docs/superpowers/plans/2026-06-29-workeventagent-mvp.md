@@ -18,7 +18,7 @@ created: 2026-06-29
 ## Global Constraints
 
 - Use opencode as the only LLM/agent execution entry.
-- Confirm Python 3.11 standard-library wrapper is acceptable before executing this plan.
+- Python 3.11 standard-library wrapper is approved for MVP implementation.
 - Local wrapper code is allowed, but no GUI or hotkey window in MVP.
 - Do not automatically create projects.
 - The agent may propose new items/tasks only with explicit terminal confirmation showing generated IDs and exact Markdown insertion blocks.
@@ -750,5 +750,4 @@ Known implementation sequencing:
 - Do not implement GUI.
 - Do not implement automatic rollups.
 - Do not implement parallel write locking beyond single-writer guard.
-- Do not execute this plan until co-creator confirms Python 3.11 standard library is acceptable in the company environment.
 - Do not start execution until this plan and F001 spec are reviewed.

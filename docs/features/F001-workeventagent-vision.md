@@ -228,6 +228,7 @@ Expected behavior:
 
 - opencode CLI for agent execution.
 - A thin local wrapper for capture, confirmation, and attachment path handling.
+- Python 3.11 standard library is approved for the local wrapper.
 - Local filesystem project workspace.
 - SQLite for rebuildable indexing.
 
@@ -252,7 +253,6 @@ Mitigations:
 ## Open Questions
 
 - What is the exact project folder layout for user-created projects?
-- Confirm Python 3.11 standard-library wrapper is acceptable in the company environment.
 - What line-count or event-count threshold should trigger item page splitting later?
 
 ## Next Action
