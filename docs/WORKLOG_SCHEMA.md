@@ -1,0 +1,164 @@
+---
+topics: [worklog-schema, markdown, agent-protocol]
+doc_kind: protocol
+created: 2026-06-29
+---
+
+# Worklog Schema
+
+This file is the operation protocol for WorkEventAgent. Project Markdown files are the source of truth. SQLite is a rebuildable index.
+
+## Required Frontmatter
+
+```yaml
+project_id: stable-kebab-id
+title: Human readable project title
+doc_kind: work_project
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+```
+
+## Required Sections
+
+Project documents must contain these sections in order:
+
+1. `Current Snapshot`
+2. `Work Map`
+3. `Decisions`
+4. `Attachments`
+5. `Timeline`
+6. `Daily / Weekly Rollups`
+
+## Mutability Rules
+
+- `Timeline`: append-only. Never edit or delete prior events.
+- `Work Map`: source of item/task structure and current task state. Update only the targeted anchored task block.
+- `Current Snapshot`: may be regenerated because it is derived.
+- `Decisions`: append new decisions; do not rewrite old decisions without a correction event.
+- `Attachments`: append attachment records.
+- `Daily / Weekly Rollups`: derived view; may be regenerated.
+
+## Truth Model
+
+Work Map and Timeline are complementary truth sources:
+
+- Work Map owns item/task existence, hierarchy, status, and next action.
+- Timeline owns append-only history of updates and corrections.
+- Current Snapshot and rollups are derived views.
+- SQLite rebuild uses Work Map for current state and Timeline for history.
+
+## Stable IDs
+
+Every project, item, task, and event must have a stable ID.
+
+ID format:
+
+- lowercase kebab-case
+- ASCII preferred
+- stable across title changes
+- unique within its parent scope
+
+Event ID format:
+
+- `YYYYMMDD-HHMMSSmmm-task-id`
+- append `-2`, `-3`, etc. on collision
+
+Anchor comments:
+
+```md
+### Item: KV cache few-shot optimization <!-- item:kv-cache-few-shot -->
+#### Task: Review current blockers <!-- task:kv-cache-blockers -->
+```
+
+Timeline events must reference affected task IDs:
+
+```md
+- 2026-06-29T15:30:00.123+08:00 <!-- event:20260629-153000123-kv-cache-blockers -->
+  - task_id: kv-cache-blockers
+  - input: Reviewed blockers for KV cache few-shot optimization...
+  - summary: Confirmed that prefix reuse strategy is the main unclear point.
+  - status: in_progress
+  - next_action: Map the current inference chain.
+```
+
+## Confirmation Proposal
+
+Before writing, the agent must show a proposal with:
+
+- target `project_id`, `item_id`, `task_id`
+- confidence and reason
+- append-only Timeline event
+- targeted Work Map block update
+- status and next action
+- attachment paths
+- changed file path and anchor
+
+The user must choose `confirm`, `edit`, or `cancel`.
+
+If the proposal creates a new item or task, it must show `new_item` or `new_task`, the generated stable ID, and the exact Markdown block to insert. This behavior is gated by the F001 item/task creation decision.
+
+## Ambiguity Rules
+
+The agent must ask a question instead of writing when:
+
+- project match is uncertain
+- item/task match is uncertain
+- multiple tasks are plausible
+- the input contains progress but no clear target
+- the requested write would create a project automatically
+
+## Correction Events
+
+Incorrect confirmed archives are corrected by appending a new Timeline event.
+
+```md
+- 2026-06-29T16:00:00.000+08:00 <!-- event:20260629-160000000-kv-cache-blockers-correction -->
+  - event_type: correction
+  - corrects_event_id: 20260629-153000123-kv-cache-blockers
+  - reason: Original update was attached to the wrong task.
+  - corrected_task_id: kv-cache-prefix-reuse
+```
+
+Never edit or remove the original Timeline event.
+
+## Attachment Rules
+
+Images and files are archived as paths only in MVP.
+
+The wrapper may copy attachments into a project-local attachment folder. The agent must not claim to understand image content unless a later feature explicitly adds image parsing.
+
+Recommended attachment record:
+
+```md
+- 2026-06-29T15:30:00+08:00
+  - path: attachments/2026-06-29/example.png
+  - related_task_id: kv-cache-blockers
+  - note: User-provided archived image.
+```
+
+## SQLite Rebuild Rules
+
+SQLite indexes Markdown state. Rebuild by scanning:
+
+- frontmatter for project metadata
+- Work Map anchors for item/task structure and current state
+- Timeline events for history, corrections, and last event
+- Attachments for related file paths
+
+If SQLite and Markdown conflict, Markdown wins. Within Markdown, Work Map is authoritative for current state and Timeline is authoritative for historical record.
+
+## Concurrency Assumption
+
+MVP assumes a single writer per project document. The wrapper must avoid launching concurrent writes to the same project. Locking and merge conflict handling are later features.
+
+## Split Rule
+
+MVP keeps one Markdown file per project. Future split is allowed when a project file becomes too large.
+
+Reserved migration rule:
+
+- keep the project file as the overview
+- move a large Item into its own file
+- preserve `item_id` and all `task_id` values
+- replace the moved Item in the project file with a summary and link
+- record the migration in Timeline or Decisions
