@@ -8,6 +8,8 @@ created: 2026-06-29
 
 This file is the operation protocol for WorkEventAgent. Project Markdown files are the source of truth. SQLite is a rebuildable index.
 
+**Rendering ownership:** Markdown blocks are deterministically rendered by the wrapper from structured fields (`target`, `event`, `status`, `next_action`). The agent outputs structured JSON only; it does not produce Markdown block content directly.
+
 ## Required Frontmatter
 
 ```yaml
@@ -85,7 +87,7 @@ Timeline events must reference affected task IDs:
 
 ## Confirmation Proposal
 
-Before writing, the agent must show a proposal with:
+Before writing, the wrapper must show a proposal with:
 
 - target `project_id`, `item_id`, `task_id`
 - confidence and reason

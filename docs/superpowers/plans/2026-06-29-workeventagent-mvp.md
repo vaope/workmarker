@@ -62,7 +62,7 @@ created: 2026-06-29
 
 **Interfaces:**
 - Produces: confirmed opencode command shape for Task 6.
-- Produces: JSON contract with keys `target`, `confidence`, `reason`, `event`, `attachment_paths`, `markdown_preview`.
+- Produces: JSON contract with keys `target`, `confidence`, `reason`, `event`, `attachment_paths`. (Note: agent does not output `markdown_preview`; Markdown blocks are deterministically rendered by the wrapper from structured fields. `target.task_title` is required for new_item/new_task.)
 
 - [ ] **Step 1: Create the minimal archivist agent**
 
@@ -88,6 +88,7 @@ Required JSON shape:
     "project_id": "string",
     "item_id": "string",
     "task_id": "string",
+    "task_title": "string (required for new_item/new_task)",
     "new_item": false,
     "new_task": false
   },
@@ -100,8 +101,7 @@ Required JSON shape:
     "status": "in_progress",
     "next_action": "string"
   },
-  "attachment_paths": [],
-  "markdown_preview": "string"
+  "attachment_paths": []
 }
 ```
 
@@ -157,7 +157,7 @@ Expected: exit code `0` and `spikes/f001-opencode-output.json` contains valid JS
 Run:
 
 ```powershell
-python -c "import json, pathlib; data=json.loads(pathlib.Path('spikes/f001-opencode-output.json').read_text(encoding='utf-8')); assert {'target','confidence','reason','event','attachment_paths','markdown_preview'} <= data.keys(); assert {'project_id','item_id','task_id'} <= data['target'].keys(); assert {'task_id','input_text','summary','status','next_action'} <= data['event'].keys(); assert 'event_id' not in data['event']"
+python -c "import json, pathlib; data=json.loads(pathlib.Path('spikes/f001-opencode-output.json').read_text(encoding='utf-8')); assert {'target','confidence','reason','event','attachment_paths'} <= data.keys(); assert {'project_id','item_id','task_id'} <= data['target'].keys(); assert {'task_id','input_text','summary','status','next_action'} <= data['event'].keys()"
 ```
 
 Expected: exit code `0`.
@@ -380,6 +380,7 @@ class TargetRef:
     project_id: str
     item_id: str
     task_id: str
+    task_title: str = ""
     new_item: bool = False
     new_task: bool = False
 
@@ -403,7 +404,6 @@ class ArchiveProposal:
     reason: str
     event: TimelineEvent
     attachment_paths: tuple[str, ...] = field(default_factory=tuple)
-    markdown_preview: str = ""
 
 
 @dataclass(frozen=True)
@@ -455,24 +455,25 @@ FIXTURE = Path("tests/fixtures/multimodal-labeling.md")
 
 class MarkdownStoreTest(unittest.TestCase):
     def proposal(self, new_task=False):
+        task_id = "kv-cache-blockers-2" if new_task else "kv-cache-blockers"
         return ArchiveProposal(
             target=TargetRef(
                 project_id="multimodal-labeling",
                 item_id="kv-cache-few-shot",
-                task_id="kv-cache-blockers-2" if new_task else "kv-cache-blockers",
+                task_id=task_id,
+                task_title="Review blocker details" if new_task else "",
                 new_task=new_task,
             ),
             confidence=0.91,
             reason="Matched KV cache item.",
             event=TimelineEvent(
                 event_id="20260629-153000123-kv-cache-blockers",
-                task_id="kv-cache-blockers-2" if new_task else "kv-cache-blockers",
+                task_id=task_id,
                 input_text="Reviewed blockers.",
                 summary="Prefix reuse strategy is unclear.",
                 status="in_progress",
                 next_action="Map current inference chain.",
             ),
-            markdown_preview="#### Task: Review blocker details <!-- task:kv-cache-blockers-2 -->",
         )
 
     def test_apply_existing_task_updates_block_and_appends_timeline(self):
@@ -635,19 +636,18 @@ from workeventagent.models import ArchiveProposal, TargetRef, TimelineEvent
 
 
 class ConfirmTest(unittest.TestCase):
-    def test_card_shows_new_task_and_markdown_preview(self):
+    def test_card_shows_new_task_flag_and_structured_fields(self):
         proposal = ArchiveProposal(
-            target=TargetRef("multimodal-labeling", "kv-cache-few-shot", "new-task", new_task=True),
+            target=TargetRef("multimodal-labeling", "kv-cache-few-shot", "new-task", task_title="New task", new_task=True),
             confidence=0.8,
             reason="User mentioned a new task.",
             event=TimelineEvent("event-1", "new-task", "input", "summary", "in_progress", "next"),
-            markdown_preview="#### Task: New task <!-- task:new-task -->",
         )
 
         card = render_confirmation_card(proposal)
 
         self.assertIn("new_task: true", card)
-        self.assertIn("#### Task: New task", card)
+        self.assertIn("New task", card)
         self.assertIn("confirm / edit / cancel", card)
 
     def test_parse_confirmation_input(self):
@@ -672,7 +672,7 @@ Expected: FAIL with missing `workeventagent.confirm`.
 
 - [ ] **Step 3: Implement renderer and parser**
 
-The renderer must include target IDs, confidence, reason, new item/task flags, timeline preview, attachment paths, and Markdown block preview. Confirmation parsing must strip whitespace and lowercase known commands; unknown input must return `cancel`. `edit_proposal_with_editor` must serialize the proposal to a temporary JSON file, run the configured editor, reload JSON, validate the proposal shape, and return the edited proposal for another confirmation render.
+The renderer must include target IDs, confidence, reason, new item/task flags, timeline preview, attachment paths, and a Markdown block preview rendered from structured fields (not from an agent-provided markdown_preview string). Confirmation parsing must strip whitespace and lowercase known commands; unknown input must return `cancel`. `edit_proposal_with_editor` must serialize the proposal to a temporary JSON file, run the configured editor, reload JSON, validate the proposal shape, and return the edited proposal for another confirmation render.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -749,8 +749,7 @@ class OpencodeRunnerTest(unittest.TestCase):
   "confidence": 0.91,
   "reason": "Matched KV cache item",
   "event": {"event_id": "agent-must-not-own-this", "task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
-  "attachment_paths": [],
-  "markdown_preview": ""
+  "attachment_paths": []
 }
 """
         proposal = parse_archivist_output(raw, "wrapper-event-id")
@@ -775,7 +774,8 @@ Agent file requirements:
 - read `docs/WORKLOG_SCHEMA.md`
 - produce JSON only
 - never write files directly
-- propose Markdown changes only
+- propose structured target/event fields; do NOT output markdown_preview — Markdown blocks are deterministically rendered by the wrapper
+- output `target.task_title` when `new_item` or `new_task` is true
 - ask for clarification when project/item/task target is uncertain
 
 Runner requirements:
@@ -785,6 +785,8 @@ Runner requirements:
 - convert valid JSON into `ArchiveProposal`
 - set `ArchiveProposal.event.event_id` from the wrapper-generated `event_id` argument
 - ignore any `event.event_id` field returned by the agent
+- ignore any `markdown_preview` field returned by the agent (wrapper renders Markdown from structured fields)
+- extract `target.task_title` from agent output when present (required for new_item/new_task)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -833,8 +835,7 @@ class CliTest(unittest.TestCase):
   "confidence": 0.91,
   "reason": "Matched KV cache item",
   "event": {"task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
-  "attachment_paths": [],
-  "markdown_preview": ""
+  "attachment_paths": []
 }
 """
         with tempfile.TemporaryDirectory() as tmp:
@@ -853,8 +854,7 @@ class CliTest(unittest.TestCase):
   "confidence": 0.91,
   "reason": "Matched KV cache item",
   "event": {"task_id": "kv-cache-blockers", "input_text": "Reviewed blockers for KV cache few-shot optimization today.", "summary": "Prefix reuse strategy is unclear.", "status": "in_progress", "next_action": "Map current inference chain."},
-  "attachment_paths": ["attachments/baseline.png"],
-  "markdown_preview": ""
+  "attachment_paths": ["attachments/baseline.png"]
 }
 """
         with tempfile.TemporaryDirectory() as tmp:
@@ -884,8 +884,7 @@ class CliTest(unittest.TestCase):
   "confidence": 0.91,
   "reason": "Matched KV cache item",
   "event": {"task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
-  "attachment_paths": [],
-  "markdown_preview": ""
+  "attachment_paths": []
 }
 """
         edit_mock.side_effect = lambda proposal: proposal
@@ -917,6 +916,7 @@ CLI behavior:
 - without `--dry-run`, prompt for `confirm`, `edit`, or `cancel`.
 - `--attach PATH` may be repeated; paths are archived as paths only and not parsed as images.
 - before parsing agent output, collect existing Timeline event IDs and generate the next event ID with `make_event_id`.
+- confirmation card renders Markdown block preview from structured fields (`target`, `event`, `status`, `next_action`), not from any agent-provided markdown_preview.
 - `confirm` writes Markdown, then updates SQLite.
 - `cancel` exits with code `2`.
 - `edit` opens the proposal editor, reloads the edited proposal, and renders confirmation again before any write.

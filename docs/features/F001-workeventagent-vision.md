@@ -26,8 +26,8 @@ MVP scope is the progress archiving loop:
 
 1. Capture a free-form text update and optional attachment paths through a thin local wrapper.
 2. Call opencode as the only LLM/agent execution entry.
-3. Ask the agent to produce a structured archive proposal.
-4. Show the proposal as a terminal confirmation card with `confirm`, `edit`, and `cancel`.
+3. Ask the agent to produce a structured archive proposal (JSON with target, event, confidence, reason fields only — no Markdown block content).
+4. Wrapper deterministically renders the Markdown block and confirmation card from structured fields.
 5. After confirmation, write the update into the project Markdown document.
 6. Update the SQLite index from the confirmed Markdown state.
 
@@ -152,6 +152,8 @@ The card must show:
 
 If the target project, item, or task is uncertain, the agent must ask a question instead of writing.
 
+Markdown blocks (Work Map updates, Timeline entries) are deterministically rendered by the wrapper from the structured proposal fields, not by the agent.
+
 ## Item and Task Creation Policy
 
 Project creation is out of scope for the agent. Item/task creation uses option B: the agent may propose a new item/task in the confirmation card, but the write occurs only after explicit user confirmation.
@@ -159,9 +161,9 @@ Project creation is out of scope for the agent. Item/task creation uses option B
 The confirmation card must show:
 
 - `new_item` or `new_task`
-- generated stable IDs
+- generated stable IDs (wrapper generates `task_id` via `make_stable_id` from agent-provided `task_title`)
 - target parent project/item
-- exact Markdown block to insert
+- exact Markdown block to insert (rendered by wrapper)
 - timeline event that will be appended
 
 ## Correction Protocol
