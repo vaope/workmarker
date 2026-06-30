@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data: file:; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+  <title>WorkEventAgent</title>
+  <link rel="stylesheet" href="main.css" />
+</head>
+<body>
+  <!-- workspace 引导（首启 / 无 workspace 时显示） -->
+  <div id="setup" class="setup hidden">
+    <div class="setup-card">
+      <div class="logo-dot"></div>
+      <h1>WorkEventAgent</h1>
+      <p>选择一个目录作为项目库。所有项目文档、附件和索引都保存在这里。</p>
+      <div class="setup-row">
+        <input id="setup-path" type="text" placeholder="尚未选择目录" readonly />
+        <button id="setup-pick" class="ghost">选择目录</button>
+      </div>
+      <button id="setup-confirm" class="primary" disabled>开始使用</button>
+    </div>
+  </div>
+
+  <!-- 主界面 -->
+  <div id="app" class="app hidden">
+    <!-- 左栏：项目库 -->
+    <aside class="sidebar">
+      <div class="sidebar-head"><span class="brand">项目库</span></div>
+      <ul id="project-list" class="project-list"></ul>
+      <div class="sidebar-foot">
+        <button id="new-project" class="ghost block">+ 新建项目</button>
+        <button id="change-workspace" class="link" title="更换项目库目录">⚙ 设置</button>
+      </div>
+    </aside>
+
+    <!-- 右栏：工作视图 -->
+    <main class="content">
+      <header class="content-head">
+        <div class="tabs">
+          <button class="tab active" data-view="tasks">任务视图</button>
+          <button class="tab" data-view="timeline">时间线</button>
+        </div>
+        <span id="project-title" class="project-title"></span>
+      </header>
+
+      <section id="tasks-view" class="view">
+        <div id="tasks-body" class="scroll-body"></div>
+      </section>
+
+      <section id="timeline-view" class="view hidden">
+        <div id="timeline-body" class="scroll-body"></div>
+      </section>
+
+      <!-- 确认卡片（浮于输入条上方） -->
+      <div id="confirm-card" class="confirm-card hidden"></div>
+
+      <!-- 底部常驻输入条 -->
+      <footer class="composer">
+        <div id="thumbs" class="thumbs hidden"></div>
+        <div class="composer-row">
+          <button id="attach-hint" class="icon-btn" title="按 Ctrl+V 粘贴剪贴板图片">📎</button>
+          <textarea id="composer-input" rows="1"
+                    placeholder="记录一下进展…  (Enter 提交 · Ctrl+Enter 换行 · Ctrl+V 粘贴图片)"></textarea>
+          <button id="submit-btn" class="primary">提交</button>
+        </div>
+        <div id="composer-status" class="composer-status"></div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- 项目初始化模态 -->
+  <div id="init-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>初始化新项目</h2>
+      <label class="field">项目名称
+        <input id="init-title" type="text" placeholder="如：基于大模型的多模态标注系统" />
+      </label>
+      <label class="field">项目 ID
+        <input id="init-id" type="text" placeholder="自动生成，可手动修改" />
+        <span class="hint">小写字母、数字、连字符。保存后不可随意更改。</span>
+      </label>
+      <div class="field-label">初始事项（可选，建议至少一个事项 + 一个任务）</div>
+      <div class="init-items" id="init-items"></div>
+      <button id="init-add-item" class="ghost">+ 添加事项</button>
+      <div class="modal-actions">
+        <button id="init-cancel" class="ghost">取消</button>
+        <button id="init-create" class="primary">创建项目</button>
+      </div>
+      <div id="init-error" class="modal-error hidden"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="main.js"></script>
+</body>
+</html>

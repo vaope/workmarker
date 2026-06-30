@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data: file:; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+  <title>快速捕获</title>
+  <link rel="stylesheet" href="capture.css" />
+</head>
+<body>
+  <div class="cap">
+    <div class="cap-head">
+      <span class="cap-title">⚡ 快速捕获</span>
+      <select id="cap-project" class="cap-project" title="归档到哪个项目"></select>
+      <span class="cap-esc">Esc 关闭</span>
+    </div>
+
+    <div id="cap-input-area">
+      <textarea id="cap-input"
+                placeholder="记录一下进展…  (Enter 提交 · Ctrl+Enter 换行 · Ctrl+V 粘贴图片)"></textarea>
+      <div id="cap-thumbs" class="thumbs hidden"></div>
+    </div>
+
+    <div id="cap-confirm" class="cap-confirm hidden"></div>
+
+    <div class="cap-foot">
+      <div id="cap-status" class="cap-status"></div>
+      <div class="cap-buttons">
+        <button id="cap-cancel" class="ghost">取消</button>
+        <button id="cap-submit" class="primary">提交</button>
+      </div>
+    </div>
+
+    <div id="cap-recent" class="cap-recent"></div>
+  </div>
+  <script src="capture.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "workeventagent-client",
+  "version": "0.1.0",
+  "description": "WorkEventAgent desktop client (Electron shell over the verified Python archiving core)",
+  "main": "main.js",
+  "author": "Clowder AI",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.4.0"
+  },
+  "dependencies": {
+    "workeventagent-client": "file:"
+  }
+}
