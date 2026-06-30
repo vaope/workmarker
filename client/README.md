@@ -10,8 +10,16 @@ WorkEventAgent 的桌面客户端，在已验证的 Python 归档核心外包一
 
 ```bash
 cd client
-npm start
+npm.cmd start
 ```
+
+也可以直接双击或运行：
+
+```bat
+client\start-client.cmd
+```
+
+说明：在某些 Windows PowerShell 环境里，`npm start` 会优先命中 `npm.ps1`，并被系统执行策略拦住。`npm.cmd start` 和 `start-client.cmd` 不走 PowerShell 脚本策略。
 
 首次启动会引导选择「项目库目录」（workspace）。之后所有项目文档 / 附件 / 索引都存这里。
 

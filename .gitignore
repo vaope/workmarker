@@ -1,0 +1,21 @@
+# Build artifacts
+dist/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Node
+client/node_modules/
+
+# Agent workspaces (local state)
+.cat-cafe/
+.claude/
+.codex/
+.gemini/
+.kimi/
+
+# OS
+Thumbs.db
+.DS_Store
