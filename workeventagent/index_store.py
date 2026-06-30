@@ -120,9 +120,9 @@ def _parse_project_document(text: str, project_path: Path) -> dict:
     status_re = re.compile(r"^-\s*status:\s*(.*)$")
     next_action_re = re.compile(r"^-\s*next_action:\s*(.*)$")
     last_event_re = re.compile(r"^-\s*last_event_id:\s*(.*)$")
-    attach_path_re = re.compile(r"^-\s*path:\s*(.*)$")
-    attach_task_re = re.compile(r"^-\s*related_task_id:\s*(.*)$")
-    attach_note_re = re.compile(r"^-\s*note:\s*(.*)$")
+    attach_path_re = re.compile(r"^\s*-\s*path:\s*(.*)$")
+    attach_task_re = re.compile(r"^\s*-\s*related_task_id:\s*(.*)$")
+    attach_note_re = re.compile(r"^\s*-\s*note:\s*(.*)$")
 
     current_task: dict | None = None
     current_attachment: dict | None = None

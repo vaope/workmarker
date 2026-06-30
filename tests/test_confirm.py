@@ -35,6 +35,7 @@ class ConfirmTest(unittest.TestCase):
     def test_parse_confirmation_input(self):
         self.assertEqual(parse_confirmation_input("confirm").kind, "confirm")
         self.assertEqual(parse_confirmation_input(" CONFIRM ").kind, "confirm")
+        self.assertEqual(parse_confirmation_input("\ufeffconfirm").kind, "confirm")
         self.assertEqual(parse_confirmation_input("edit").kind, "edit")
         self.assertEqual(parse_confirmation_input("cancel").kind, "cancel")
         self.assertEqual(parse_confirmation_input("").kind, "cancel")

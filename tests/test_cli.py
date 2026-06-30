@@ -1,4 +1,6 @@
 import tempfile
+import subprocess
+import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +12,17 @@ from workeventagent.opencode_runner import OpencodeRunnerError
 
 
 class CliTest(unittest.TestCase):
+    def test_module_entrypoint_invokes_cli_main(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "workeventagent.cli"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("usage: workeventagent", result.stdout)
+
     @patch("workeventagent.cli.run_archivist")
     def test_capture_dry_run_prints_confirmation_card(self, run_archivist):
         run_archivist.return_value = """
@@ -59,7 +72,9 @@ class CliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "project.md"
             db = Path(tmp) / "index.sqlite"
-            attachment = Path(tmp) / "baseline.png"
+            attachment_dir = Path(tmp) / "attachments"
+            attachment_dir.mkdir()
+            attachment = attachment_dir / "baseline.png"
             attachment.write_bytes(b"not-analyzed")
             project.write_text(
                 Path("tests/fixtures/multimodal-labeling.md").read_text(encoding="utf-8"),
@@ -90,6 +105,50 @@ class CliTest(unittest.TestCase):
         self.assertIn("  - path: attachments/baseline.png", updated)
         self.assertIn("  - related_task_id: kv-cache-blockers", updated)
         self.assertEqual(task["next_action"], "Map current inference chain.")
+
+    @patch("workeventagent.cli.input", return_value="confirm")
+    @patch("workeventagent.cli.run_archivist")
+    def test_capture_uses_cli_attach_paths_when_agent_omits_them(
+        self, run_archivist, input_mock
+    ):
+        run_archivist.return_value = """
+{
+  "target": {"project_id": "multimodal-labeling", "item_id": "kv-cache-few-shot", "task_id": "kv-cache-blockers"},
+  "confidence": 0.91,
+  "reason": "Matched KV cache item",
+  "event": {"task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
+  "attachment_paths": []
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            db = Path(tmp) / "index.sqlite"
+            attachment_dir = Path(tmp) / "attachments"
+            attachment_dir.mkdir()
+            attachment = attachment_dir / "baseline.png"
+            attachment.write_bytes(b"not-analyzed")
+            project.write_text(
+                Path("tests/fixtures/multimodal-labeling.md").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+
+            code = main(
+                [
+                    "capture",
+                    "--project",
+                    str(project),
+                    "--db",
+                    str(db),
+                    "--text",
+                    "input",
+                    "--attach",
+                    str(attachment),
+                ]
+            )
+            updated = project.read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0)
+        self.assertIn("  - path: attachments/baseline.png", updated)
 
     @patch("workeventagent.cli.edit_proposal_with_editor")
     @patch("workeventagent.cli.input", side_effect=["edit", "confirm"])

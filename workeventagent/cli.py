@@ -4,6 +4,7 @@ import argparse
 import json as _json
 import re
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -67,13 +68,17 @@ def main(argv: list[str] | None = None, now: datetime | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    if args.attach:
+        proposal = replace(
+            proposal,
+            attachment_paths=_attachment_paths_from_args(args.attach, project_path.parent),
+        )
+
     # 3.5. Anti-collision: new_task must not reuse existing task_id
     if proposal.target.new_task:
         existing_task_ids = _collect_existing_task_ids(doc_text)
         unique_task_id = make_unique_stable_id(proposal.target.task_title, existing_task_ids)
         if unique_task_id != proposal.target.task_id:
-            from dataclasses import replace
-
             new_event_id = make_event_id(now, unique_task_id, existing_event_ids)
             new_target = replace(proposal.target, task_id=unique_task_id)
             new_event = replace(proposal.event, event_id=new_event_id, task_id=unique_task_id)
@@ -160,6 +165,21 @@ def _collect_existing_task_ids(text: str) -> set[str]:
     return task_ids
 
 
+def _attachment_paths_from_args(paths: list[Path], project_dir: Path) -> tuple[str, ...]:
+    rendered: list[str] = []
+    base = project_dir.resolve()
+    for path in paths:
+        if not path.is_absolute():
+            rendered.append(path.as_posix())
+            continue
+        resolved = path.resolve()
+        try:
+            rendered.append(resolved.relative_to(base).as_posix())
+        except ValueError:
+            rendered.append(str(resolved))
+    return tuple(rendered)
+
+
 def _quick_extract_task_id(raw: str) -> str:
     """Extract task_id from raw NDJSON/JSON without full validation."""
     # Try NDJSON lines first
@@ -194,3 +214,7 @@ def _extract_json_from_fence(text: str) -> str:
     fence_re = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
     match = fence_re.search(text)
     return match.group(1) if match else text
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

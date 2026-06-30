@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -16,7 +17,7 @@ def run_archivist(
     prompt: str, project_doc: Path, opencode_bin: str = "opencode"
 ) -> str:
     cmd = [
-        opencode_bin,
+        _resolve_executable(opencode_bin),
         "run",
         "--agent",
         "workevent-archivist",
@@ -26,14 +27,32 @@ def run_archivist(
         "json",
         prompt,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
+    except FileNotFoundError as exc:
+        raise OpencodeRunnerError(
+            f"could not start opencode executable: {opencode_bin}"
+        ) from exc
     if result.returncode != 0:
         raise OpencodeRunnerError(
             f"opencode exited {result.returncode}: {result.stderr.strip()}"
         )
-    if not result.stdout.strip():
+    stdout = result.stdout or ""
+    if not stdout.strip():
         raise OpencodeRunnerError("opencode returned empty stdout")
-    return result.stdout
+    return stdout
+
+
+def _resolve_executable(opencode_bin: str) -> str:
+    return shutil.which(opencode_bin) or opencode_bin
 
 
 def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:

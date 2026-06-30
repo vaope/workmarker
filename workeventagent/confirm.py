@@ -56,7 +56,7 @@ def render_confirmation_card(proposal: ArchiveProposal) -> str:
 
 
 def parse_confirmation_input(raw: str) -> ConfirmationDecision:
-    normalized = raw.strip().lower()
+    normalized = raw.strip().removeprefix("\ufeff").strip().lower()
     if normalized == "confirm":
         return ConfirmationDecision(kind="confirm")
     if normalized == "edit":
@@ -149,4 +149,3 @@ def _render_markdown_preview(proposal: ArchiveProposal) -> str:
         lines.append(f"- last_event_id: {e.event_id}")
 
     return "\n".join(lines)
-
