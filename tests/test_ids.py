@@ -9,6 +9,15 @@ class IdTest(unittest.TestCase):
         self.assertEqual(make_stable_id("KV Cache Few Shot"), "kv-cache-few-shot")
         self.assertEqual(make_stable_id("  Review   Blockers  "), "review-blockers")
 
+    def test_stable_id_hashes_non_ascii_only_titles(self):
+        blocker_id = make_stable_id("\u67e5\u770b\u5f53\u524d\u963b\u585e\u70b9")
+        dataset_id = make_stable_id("\u6570\u636e\u96c6\u751f\u4ea7")
+
+        self.assertRegex(blocker_id, r"^id-[0-9a-f]{8}$")
+        self.assertRegex(dataset_id, r"^id-[0-9a-f]{8}$")
+        self.assertNotEqual(blocker_id, dataset_id)
+        self.assertEqual(blocker_id, make_stable_id("\u67e5\u770b\u5f53\u524d\u963b\u585e\u70b9"))
+
     def test_unique_stable_id_adds_suffix_on_collision(self):
         existing = {"kv-cache-few-shot", "kv-cache-few-shot-2"}
         self.assertEqual(make_unique_stable_id("KV Cache Few Shot", existing), "kv-cache-few-shot-3")

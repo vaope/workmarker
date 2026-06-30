@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from datetime import datetime
 
 
 def make_stable_id(title: str) -> str:
-    lowered = title.strip().lower()
+    stripped = title.strip()
+    lowered = stripped.lower()
     normalized = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
-    return normalized or "untitled"
+    if normalized:
+        return normalized
+    if stripped:
+        digest = hashlib.sha1(stripped.encode("utf-8")).hexdigest()[:8]
+        return f"id-{digest}"
+    return "untitled"
 
 
 def make_unique_stable_id(title: str, existing: set[str]) -> str:
