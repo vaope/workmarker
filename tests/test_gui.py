@@ -65,19 +65,19 @@ updated: 2026-07-01
 
 ## Timeline
 
-- 2026-07-01T10:00:00+00:00 <!-- event:ev1 -->
-  - task_id: task-two
-  - input: Finished task two.
-  - summary: Done with task two.
-  - status: done
-  - next_action: 
-
 - 2026-07-01T11:00:00+00:00 <!-- event:ev2 -->
   - task_id: task-one
   - input: Still working on task one.
   - summary: Making progress.
   - status: in_progress
   - next_action: Continue tomorrow.
+
+- 2026-07-01T10:00:00+00:00 <!-- event:ev1 -->
+  - task_id: task-two
+  - input: Finished task two.
+  - summary: Done with task two.
+  - status: done
+  - next_action: 
 
 ## Daily / Weekly Rollups
 
@@ -126,12 +126,13 @@ def _deep_update(d, u):
 
 class TimelineParserTest(unittest.TestCase):
     def test_parses_timeline_events_from_synthetic(self):
+        """Fixture uses real append layout: newest (ev2) on top, oldest (ev1) below."""
         events = _parse_timeline_events(_SYNTHETIC_WITH_TIMELINE)
         self.assertEqual(len(events), 2)
-        self.assertEqual(events[0]["event_id"], "ev1")
-        self.assertEqual(events[0]["task_id"], "task-two")
-        self.assertEqual(events[1]["event_id"], "ev2")
-        self.assertEqual(events[1]["summary"], "Making progress.")
+        self.assertEqual(events[0]["event_id"], "ev2")
+        self.assertEqual(events[0]["summary"], "Making progress.")
+        self.assertEqual(events[1]["event_id"], "ev1")
+        self.assertEqual(events[1]["task_id"], "task-two")
 
     def test_empty_timeline_returns_empty(self):
         text = "---\nproject_id: test\n---\n## Timeline\n\n## Other\n"

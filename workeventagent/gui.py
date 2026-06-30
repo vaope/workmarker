@@ -289,7 +289,7 @@ def handle_timeline(request: dict) -> dict:
         task_info[wt["task_id"]] = {"item_id": wt["item_id"], "task_title": wt["title"]}
 
     result_events: list[dict] = []
-    for te in reversed(events):  # reverse chronological
+    for te in events:  # events already newest-first from _append_timeline
         tid = te.get("task_id", "")
         info = task_info.get(tid, {})
         result_events.append({
