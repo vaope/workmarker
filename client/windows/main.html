@@ -37,9 +37,12 @@
     <!-- 右栏：工作视图 -->
     <main class="content">
       <header class="content-head">
-        <div class="tabs">
-          <button class="tab active" data-view="tasks">任务视图</button>
-          <button class="tab" data-view="timeline">时间线</button>
+        <div class="head-left">
+          <div class="tabs">
+            <button class="tab active" data-view="tasks">任务视图</button>
+            <button class="tab" data-view="timeline">时间线</button>
+          </div>
+          <button id="new-item" class="ghost small">+ 新建需求</button>
         </div>
         <span id="project-title" class="project-title"></span>
       </header>
@@ -88,6 +91,23 @@
         <button id="init-create" class="primary">创建项目</button>
       </div>
       <div id="init-error" class="modal-error hidden"></div>
+    </div>
+  </div>
+
+  <div id="manual-modal" class="modal hidden">
+    <div class="modal-card small-card">
+      <h2 id="manual-title">新建需求</h2>
+      <label id="manual-item-field" class="field hidden">所属需求
+        <select id="manual-item"></select>
+      </label>
+      <label class="field"><span id="manual-name-label">需求名称</span>
+        <input id="manual-name" type="text" placeholder="例如：明确项目需求" />
+      </label>
+      <div class="modal-actions">
+        <button id="manual-cancel" class="ghost">取消</button>
+        <button id="manual-create" class="primary">创建</button>
+      </div>
+      <div id="manual-error" class="modal-error hidden"></div>
     </div>
   </div>
 

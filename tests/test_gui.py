@@ -12,6 +12,8 @@ from workeventagent.gui import (
     _parse_work_map_tasks,
     _parse_attachments_task_ids,
     _generate_init_markdown,
+    handle_create_item,
+    handle_create_task,
     handle_propose,
     handle_commit,
     handle_projects,
@@ -438,6 +440,40 @@ class TasksTest(unittest.TestCase):
                 if task["task_id"] == "task-two":
                     self.assertEqual(task["updated_at"], "2026-07-01T10:00:00+00:00")
 
+    def test_tasks_includes_empty_items(self):
+        text = """---
+project_id: test-proj
+title: Test Project
+doc_kind: work_project
+created: 2026-07-01
+updated: 2026-07-01
+---
+
+# Test Project
+
+## Work Map
+
+### Item: Empty Item <!-- item:empty-item -->
+
+### Item: Item With Task <!-- item:item-with-task -->
+
+#### Task: Task A <!-- task:task-a -->
+- status: in_progress
+- next_action:
+- last_event_id:
+
+## Timeline
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            project.write_text(text, encoding="utf-8")
+
+            result = handle_tasks({"project_path": str(project)})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual([item["item_id"] for item in result["items"]], ["empty-item", "item-with-task"])
+        self.assertEqual(result["items"][0]["tasks"], [])
+
 
 # ── timeline ─────────────────────────────────────────────
 
@@ -568,6 +604,66 @@ class InitTest(unittest.TestCase):
             text = project_path.read_text(encoding="utf-8")
             self.assertIn("## Work Map", text)
             self.assertIn("## Timeline", text)
+
+
+class ManualCreateTest(unittest.TestCase):
+    def test_create_item_adds_visible_empty_item_and_rebuilds_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            db_path = workspace / "index.sqlite"
+            init = handle_init({
+                "workspace": str(workspace),
+                "title": "Manual Project",
+                "project_id": "manual-project",
+                "db_path": str(db_path),
+                "items": [],
+            })
+            project_path = Path(init["project_path"])
+
+            result = handle_create_item({
+                "project_path": str(project_path),
+                "db_path": str(db_path),
+                "title": "\u660e\u786e\u9879\u76ee\u9700\u6c42",
+            })
+            tasks = handle_tasks({"project_path": str(project_path)})
+
+        self.assertTrue(result["ok"])
+        self.assertRegex(result["item_id"], r"^id-[0-9a-f]{8}$")
+        self.assertEqual(tasks["items"][0]["item_id"], result["item_id"])
+        self.assertEqual(tasks["items"][0]["tasks"], [])
+
+    def test_create_task_adds_unique_task_under_item(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            db_path = workspace / "index.sqlite"
+            init = handle_init({
+                "workspace": str(workspace),
+                "title": "Manual Project",
+                "project_id": "manual-project",
+                "db_path": str(db_path),
+                "items": [{"title": "\u9700\u6c42", "tasks": []}],
+            })
+            project_path = Path(init["project_path"])
+            item_id = handle_tasks({"project_path": str(project_path)})["items"][0]["item_id"]
+
+            first = handle_create_task({
+                "project_path": str(project_path),
+                "db_path": str(db_path),
+                "item_id": item_id,
+                "title": "\u8c03\u7814",
+            })
+            second = handle_create_task({
+                "project_path": str(project_path),
+                "db_path": str(db_path),
+                "item_id": item_id,
+                "title": "\u8c03\u7814",
+            })
+            tasks = handle_tasks({"project_path": str(project_path)})["items"][0]["tasks"]
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertEqual(second["task_id"], f"{first['task_id']}-2")
+        self.assertEqual([task["task_id"] for task in tasks], [first["task_id"], second["task_id"]])
 
 
 # ── generate_init_markdown ───────────────────────────────

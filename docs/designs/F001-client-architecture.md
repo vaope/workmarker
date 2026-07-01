@@ -37,7 +37,7 @@ Electron 客户端 (client/)
          │
          ▼
   Python GUI backend (workeventagent/gui.py + registry.py)
-    propose / commit / projects / tasks / timeline / init
+    propose / commit / projects / tasks / timeline / init / create_item / create_task
     复用 → opencode_runner / markdown_store / index_store / ids / models
          │
          ▼
@@ -104,7 +104,7 @@ Electron 客户端 (client/)
 ### 3.4 tasks — 单项目任务树
 
 请求：`{"project_path":"..."}`
-处理：解析 Work Map，按 item 分组；每个 task 含 status/next_action/last_event_id/title；`updated_at` 取该 task 最近 timeline 事件时间（无则空）。
+处理：解析 Work Map，按 item 分组；**即使 item 下暂无 task，也必须返回该 item**；每个 task 含 status/next_action/last_event_id/title；`updated_at` 取该 task 最近 timeline 事件时间（无则空）。
 响应：
 ```json
 {"ok":true,"project_id":"...","title":"...",
@@ -134,6 +134,41 @@ Electron 客户端 (client/)
 - `project_id` 缺省由 `make_stable_id(title)` 生成；前端可覆盖。
 - 已存在同名 `project_id` → `{"ok":false,"kind":"exists"}`，不覆盖。
 响应：`{"ok":true,"project_path":"...","project_id":"..."}`
+
+### 3.7 create_item — 手动创建需求/事项
+
+请求：`{"project_path":"...","db_path":"...","title":"明确项目需求"}`
+
+处理：读取项目 Markdown → 基于现有 `<!-- item:... -->` 锚点用 `make_unique_stable_id` 生成全项目唯一 `item_id` → 在 `## Work Map` 末尾插入标准 `### Item: <title> <!-- item:<item_id> -->` 块 → bump frontmatter `updated:` → 原子写 Markdown → `init_db + rebuild_index`。
+
+响应：`{"ok":true,"item_id":"...","title":"明确项目需求"}`
+
+约束：
+- 空 title 返回 `{"ok":false,"kind":"invalid_input"}`。
+- 只创建结构，不生成 timeline event；这是用户手动维护项目结构，不是一次工作进展。
+- 新建空 item 必须能被 `tasks` 命令返回，前端才能立即显示并继续添加 task。
+
+### 3.8 create_task — 手动创建工作项
+
+请求：`{"project_path":"...","db_path":"...","item_id":"...","title":"梳理推理链路"}`
+
+处理：读取项目 Markdown → 校验目标 item anchor 存在 → 基于现有 `<!-- task:... -->` 锚点用 `make_unique_stable_id` 生成全项目唯一 `task_id` → 在目标 Item 下插入标准 Task 块：
+
+```markdown
+#### Task: 梳理推理链路 <!-- task:... -->
+- status: in_progress
+- next_action:
+- last_event_id:
+```
+
+然后 bump `updated:` → 原子写 Markdown → `init_db + rebuild_index`。
+
+响应：`{"ok":true,"item_id":"...","task_id":"...","title":"梳理推理链路"}`
+
+约束：
+- 空 title 返回 `invalid_input`。
+- item anchor 不存在返回 `invalid_project`，不写文件。
+- 手动创建的 task 初始 `status = in_progress`，`next_action`/`last_event_id` 为空，等待后续 AI 归档或用户补充。
 
 ## 4. 项目库 Registry（registry.py）
 
@@ -165,6 +200,8 @@ preload 暴露（`window.wea`）：
 | `listTasks(projectPath)` | gui tasks |
 | `listTimeline(projectPath)` | gui timeline |
 | `initProject(spec)` | gui init |
+| `createItem(projectPath, title)` | gui create_item |
+| `createTask(projectPath, itemId, title)` | gui create_task |
 | `readClipboardImage()` | 主进程 clipboard.readImage → 写 temp → 返回 {tempPath, filename} 或 null |
 | `getConfig()` / `setWorkspace(path)` | config 读写 |
 | `pickWorkspaceDir()` | dialog 选目录 |
@@ -196,13 +233,13 @@ preload 暴露（`window.wea`）：
 
 | 线 | 负责 | 内容 |
 |---|---|---|
-| A — Python backend | 金哥 | §3 六命令 + §4 registry + 附件复制 + Timeline 解析器 + unittest |
+| A — Python backend | 金哥 | §3 八命令 + §4 registry + 附件复制 + Timeline 解析器 + unittest |
 | B — Electron 前端 | 砚砚 | §5 脚手架/主进程/桥 + 主窗口 + 快速捕获窗口 |
 | 集成验收 | 砚砚 | 端到端 + 启动 + 全功能走查 |
 
 验收清单（co-creator「可直接运行」硬目标）：
 - [ ] 现有 31 Python tests 不破
-- [ ] backend 六命令各有 unittest，真实 opencode propose 产出合法 JSON
+- [ ] backend 八命令各有 unittest，真实 opencode propose 产出合法 JSON
 - [ ] `npm start` 能启动 Electron 主窗口，无报错
 - [ ] 新建项目 → 生成合规 Markdown + attachments 目录 + 入索引
 - [ ] 输入一句进展 → 确认卡片 → 确认 → Markdown 追加 Timeline + 更新 Work Map + SQLite 更新

@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('wea', {
   listTasks: (projectPath) => ipcRenderer.invoke('wea:listTasks', { projectPath }),
   listTimeline: (projectPath) => ipcRenderer.invoke('wea:listTimeline', { projectPath }),
   initProject: (spec) => ipcRenderer.invoke('wea:initProject', spec),
+  createItem: (projectPath, title) => ipcRenderer.invoke('wea:createItem', { projectPath, title }),
+  createTask: (projectPath, itemId, title) =>
+    ipcRenderer.invoke('wea:createTask', { projectPath, itemId, title }),
 
   // --- clipboard / attachments ---
   readClipboardImage: () => ipcRenderer.invoke('wea:readClipboardImage'),

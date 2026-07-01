@@ -40,6 +40,7 @@ button { font-family: inherit; cursor: pointer; }
 }
 .ghost:hover { color: var(--text); border-color: var(--accent); }
 .ghost.block { width: 100%; }
+.ghost.small { padding: 6px 10px; font-size: 12px; border-radius: 7px; }
 .link { background: none; border: none; color: var(--text-faint); padding: 6px; }
 .link:hover { color: var(--text); }
 .icon-btn { background: none; border: none; font-size: 18px; padding: 6px 8px; color: var(--text-dim); border-radius: 8px; }
@@ -101,6 +102,7 @@ button { font-family: inherit; cursor: pointer; }
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 20px; border-bottom: 1px solid var(--border);
 }
+.head-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .tabs { display: flex; gap: 4px; }
 .tab {
   background: none; border: none; color: var(--text-dim); padding: 7px 14px;
@@ -115,9 +117,14 @@ button { font-family: inherit; cursor: pointer; }
 
 /* tasks view */
 .item-group { margin-bottom: 22px; }
-.item-head { font-size: 13px; color: var(--text-dim); font-weight: 700; margin: 0 0 8px;
-  text-transform: none; display: flex; align-items: center; gap: 6px; }
-.item-head::before { content: "▾"; color: var(--text-faint); }
+.item-head {
+  font-size: 13px; color: var(--text-dim); font-weight: 700; margin: 0 0 8px;
+  text-transform: none; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.item-head-title { min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item-head-title::before { content: "▾"; color: var(--text-faint); flex-shrink: 0; }
+.add-task-mini { flex-shrink: 0; padding: 4px 9px; font-size: 12px; border-radius: 7px; }
+.empty-tasks { color: var(--text-faint); font-size: 12px; padding: 6px 0 8px 18px; }
 .task-row {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 12px 14px; margin-bottom: 8px; cursor: pointer; transition: border-color .12s;
@@ -192,9 +199,10 @@ button { font-family: inherit; cursor: pointer; }
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; }
 .modal-card { width: 520px; max-height: 86vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--border);
   border-radius: 16px; padding: 26px; }
+.modal-card.small-card { width: 420px; }
 .modal-card h2 { margin: 0 0 18px; font-size: 18px; }
 .field { display: block; margin-bottom: 14px; color: var(--text-dim); font-size: 13px; }
-.field input { display: block; width: 100%; margin-top: 6px; background: var(--bg-2); border: 1px solid var(--border);
+.field input, .field select { display: block; width: 100%; margin-top: 6px; background: var(--bg-2); border: 1px solid var(--border);
   color: var(--text); border-radius: 8px; padding: 9px 12px; font-size: 14px; }
 .field .hint { color: var(--text-faint); font-size: 11px; margin-top: 4px; display: block; }
 .field-label { color: var(--text-dim); font-size: 13px; margin: 6px 0 8px; }

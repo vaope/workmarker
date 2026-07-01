@@ -59,6 +59,8 @@ def _main_impl() -> None:
         "tasks": handle_tasks,
         "timeline": handle_timeline,
         "init": handle_init,
+        "create_item": handle_create_item,
+        "create_task": handle_create_task,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -236,6 +238,7 @@ def handle_tasks(request: dict) -> dict:
     project_id = fm.get("project_id", "")
     title = fm.get("title", "")
 
+    work_map_items = _parse_work_map_items(text)
     work_map_tasks = _parse_work_map_tasks(text)
     timeline_events = _parse_timeline_events(text)
 
@@ -248,7 +251,10 @@ def handle_tasks(request: dict) -> dict:
             task_updated[tid] = ts
 
     # Group tasks by item
-    items_map: dict[str, dict] = {}
+    items_map: dict[str, dict] = {
+        item["item_id"]: {"item_id": item["item_id"], "title": item["title"], "tasks": []}
+        for item in work_map_items
+    }
     for wt in work_map_tasks:
         item_id = wt["item_id"]
         if item_id not in items_map:
@@ -263,7 +269,7 @@ def handle_tasks(request: dict) -> dict:
         })
 
     # Preserve original item order from Work Map
-    item_order: list[str] = []
+    item_order: list[str] = [item["item_id"] for item in work_map_items]
     for wt in work_map_tasks:
         if wt["item_id"] not in item_order:
             item_order.append(wt["item_id"])
@@ -344,6 +350,51 @@ def handle_init(request: dict) -> dict:
     return {"ok": True, "project_path": str(project_path), "project_id": project_id}
 
 
+def handle_create_item(request: dict) -> dict:
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    title = request.get("title", "").strip()
+    if not title:
+        return {"ok": False, "kind": "invalid_input", "error": "item title is required"}
+
+    text = project_path.read_text(encoding="utf-8")
+    item_id = make_unique_stable_id(title, _collect_existing_item_ids(text))
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    try:
+        updated = _insert_item_block(text, title, item_id, date_str)
+    except ValueError as exc:
+        return {"ok": False, "kind": "invalid_project", "error": str(exc)}
+
+    write_project_atomically(project_path, updated)
+    init_db(db_path)
+    rebuild_index(db_path, [project_path])
+    return {"ok": True, "item_id": item_id, "title": title}
+
+
+def handle_create_task(request: dict) -> dict:
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    item_id = request["item_id"]
+    title = request.get("title", "").strip()
+    if not title:
+        return {"ok": False, "kind": "invalid_input", "error": "task title is required"}
+
+    text = project_path.read_text(encoding="utf-8")
+    task_id = make_unique_stable_id(title, _collect_existing_task_ids(text))
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    try:
+        updated = _insert_task_block(text, item_id, title, task_id, date_str)
+    except ValueError as exc:
+        return {"ok": False, "kind": "invalid_project", "error": str(exc)}
+
+    write_project_atomically(project_path, updated)
+    init_db(db_path)
+    rebuild_index(db_path, [project_path])
+    return {"ok": True, "item_id": item_id, "task_id": task_id, "title": title}
+
+
 def _generate_init_markdown(
     project_id: str, title: str, date_str: str, items_spec: list[dict]
 ) -> str:
@@ -400,6 +451,57 @@ def _generate_init_markdown(
     return "\n".join(lines)
 
 
+def _insert_item_block(text: str, title: str, item_id: str, updated_date: str) -> str:
+    work_map_match = re.search(r"(## Work Map\s*\n)", text)
+    if not work_map_match:
+        raise ValueError("## Work Map section not found")
+
+    section_match = re.search(r"^## (?!Work Map\b).*$", text[work_map_match.end():], re.MULTILINE)
+    insert_pos = work_map_match.end() + section_match.start() if section_match else len(text)
+
+    prefix = text[:insert_pos].rstrip() + "\n\n"
+    suffix = text[insert_pos:].lstrip("\n")
+    block = f"### Item: {title} <!-- item:{item_id} -->\n\n"
+    return _bump_updated_text(prefix + block + suffix, updated_date)
+
+
+def _insert_task_block(text: str, item_id: str, title: str, task_id: str, updated_date: str) -> str:
+    item_anchor = f"<!-- item:{item_id} -->"
+    lines = text.splitlines(keepends=True)
+
+    item_idx = None
+    for idx, line in enumerate(lines):
+        if item_anchor in line:
+            item_idx = idx
+            break
+    if item_idx is None:
+        raise ValueError(f"Item anchor not found: {item_anchor}")
+
+    insert_idx = len(lines)
+    for idx in range(item_idx + 1, len(lines)):
+        stripped = lines[idx].strip()
+        if stripped.startswith("### Item:") or stripped.startswith("## "):
+            insert_idx = idx
+            break
+
+    new_lines = list(lines[:insert_idx])
+    if new_lines and new_lines[-1].strip() != "":
+        new_lines.append("\n")
+    new_lines.extend([
+        f"#### Task: {title} <!-- task:{task_id} -->\n",
+        "- status: in_progress\n",
+        "- next_action:\n",
+        "- last_event_id:\n",
+        "\n",
+    ])
+    new_lines.extend(lines[insert_idx:])
+    return _bump_updated_text("".join(new_lines), updated_date)
+
+
+def _bump_updated_text(text: str, updated_date: str) -> str:
+    return re.sub(r"(updated:\s*).*", rf"\g<1>{updated_date}", text, count=1)
+
+
 # ── Timeline parser (new capability) ────────────────────
 
 def _parse_timeline_events(text: str) -> list[dict]:
@@ -454,6 +556,31 @@ def _parse_timeline_events(text: str) -> list[dict]:
 
 
 # ── Work Map task parser ─────────────────────────────────
+
+def _parse_work_map_items(text: str) -> list[dict]:
+    """Parse ## Work Map item headings, including items that have no tasks yet."""
+    items: list[dict] = []
+    in_work_map = False
+    item_re = re.compile(r"^###\s+Item:\s+(.+?)\s*<!--\s*item:(.+?)\s*-->")
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "## Work Map":
+            in_work_map = True
+            continue
+        if in_work_map and stripped.startswith("## ") and stripped != "## Work Map":
+            break
+
+        if in_work_map:
+            match = item_re.match(line)
+            if match:
+                items.append({
+                    "item_id": match.group(2).strip(),
+                    "title": match.group(1).strip(),
+                })
+
+    return items
+
 
 def _parse_work_map_tasks(text: str) -> list[dict]:
     """Parse ## Work Map section for item/task structure and current state."""
@@ -553,6 +680,13 @@ def _collect_existing_event_ids(text: str) -> set[str]:
         if val:
             event_ids.add(val)
     return event_ids
+
+
+def _collect_existing_item_ids(text: str) -> set[str]:
+    item_ids: set[str] = set()
+    for m in re.finditer(r"<!--\s*item:(.+?)\s*-->", text):
+        item_ids.add(m.group(1).strip())
+    return item_ids
 
 
 def _collect_existing_task_ids(text: str) -> set[str]:

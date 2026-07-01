@@ -165,6 +165,25 @@ function attachIpc() {
     return callBackend('init', { ...spec, workspace: c.workspace, db_path: dbPathFor(c.workspace) }, c.pythonCmd);
   });
 
+  ipcMain.handle('wea:createItem', async (_e, { projectPath, title }) => {
+    const c = cfg();
+    return callBackend('create_item', {
+      project_path: projectPath,
+      db_path: dbPathFor(c.workspace),
+      title,
+    }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:createTask', async (_e, { projectPath, itemId, title }) => {
+    const c = cfg();
+    return callBackend('create_task', {
+      project_path: projectPath,
+      db_path: dbPathFor(c.workspace),
+      item_id: itemId,
+      title,
+    }, c.pythonCmd);
+  });
+
   ipcMain.handle('wea:readClipboardImage', async () => {
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;

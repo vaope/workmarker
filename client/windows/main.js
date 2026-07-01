@@ -11,6 +11,8 @@ const state = {
   proposal: null,       // proposal awaiting confirmation
   view: 'tasks',
   busy: false,
+  manualMode: null,     // "item" | "task"
+  manualItemId: '',
 };
 
 // ---- boot ----------------------------------------------------------------
@@ -55,11 +57,17 @@ function bindStaticHandlers() {
   });
 
   $('#new-project').addEventListener('click', openInitModal);
+  $('#new-item').addEventListener('click', () => openManualModal('item'));
   $('#init-cancel').addEventListener('click', () => $('#init-modal').classList.add('hidden'));
   $('#init-add-item').addEventListener('click', () => addInitItem());
   $('#init-create').addEventListener('click', createProject);
   $('#init-title').addEventListener('input', (e) => {
     $('#init-id').value = slugify(e.target.value);
+  });
+  $('#manual-cancel').addEventListener('click', closeManualModal);
+  $('#manual-create').addEventListener('click', createManualEntry);
+  $('#manual-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); createManualEntry(); }
   });
 
   // tabs
@@ -162,8 +170,25 @@ function renderTasks() {
   items.forEach((item) => {
     const group = document.createElement('div');
     group.className = 'item-group';
-    group.innerHTML = `<div class="item-head">${esc(item.title)}</div>`;
-    (item.tasks || []).forEach((task) => group.appendChild(taskRow(task)));
+    const head = document.createElement('div');
+    head.className = 'item-head';
+    head.innerHTML =
+      `<span class="item-head-title">${esc(item.title)}</span>` +
+      `<button class="ghost add-task-mini" type="button">+ 工作项</button>`;
+    head.querySelector('.add-task-mini').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openManualModal('task', item.item_id);
+    });
+    group.appendChild(head);
+    const tasks = item.tasks || [];
+    if (!tasks.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-tasks';
+      empty.textContent = '暂无工作项';
+      group.appendChild(empty);
+    } else {
+      tasks.forEach((task) => group.appendChild(taskRow(task)));
+    }
     body.appendChild(group);
   });
 }
@@ -353,6 +378,82 @@ async function commitProposal() {
   } catch (err) {
     setStatus(`出错：${err.message || err}`, 'error');
   }
+}
+
+// ---- manual item/task creation -------------------------------------------
+function openManualModal(mode, itemId = '') {
+  if (!state.currentProject) {
+    toast('请先选择或新建一个项目', 'err');
+    return;
+  }
+
+  state.manualMode = mode;
+  state.manualItemId = itemId || '';
+  $('#manual-error').classList.add('hidden');
+  $('#manual-name').value = '';
+
+  const isTask = mode === 'task';
+  $('#manual-title').textContent = isTask ? '新建工作项' : '新建需求';
+  $('#manual-name-label').textContent = isTask ? '工作项名称' : '需求名称';
+  $('#manual-name').placeholder = isTask ? '例如：梳理推理链路' : '例如：明确项目需求';
+  $('#manual-item-field').classList.toggle('hidden', !isTask);
+
+  if (isTask) {
+    const items = (state.tasksData && state.tasksData.items) || [];
+    const select = $('#manual-item');
+    select.innerHTML = items
+      .map((item) => `<option value="${esc(item.item_id)}">${esc(item.title)}</option>`)
+      .join('');
+    if (!items.length) {
+      toast('请先新建一个需求，再添加工作项', 'err');
+      return;
+    }
+    select.value = itemId || items[0].item_id;
+  }
+
+  $('#manual-modal').classList.remove('hidden');
+  $('#manual-name').focus();
+}
+
+function closeManualModal() {
+  $('#manual-modal').classList.add('hidden');
+  state.manualMode = null;
+  state.manualItemId = '';
+}
+
+async function createManualEntry() {
+  const title = $('#manual-name').value.trim();
+  const mode = state.manualMode;
+  if (!title) {
+    showManualError(mode === 'task' ? '请填写工作项名称' : '请填写需求名称');
+    return;
+  }
+
+  $('#manual-create').disabled = true;
+  try {
+    const res = mode === 'task'
+      ? await wea.createTask(state.currentProject.path, $('#manual-item').value, title)
+      : await wea.createItem(state.currentProject.path, title);
+
+    if (!res || !res.ok) {
+      showManualError(`创建失败：${(res && res.error) || '后端未返回结果'}`);
+      return;
+    }
+
+    closeManualModal();
+    toast(mode === 'task' ? '工作项已创建' : '需求已创建', 'ok');
+    await refreshCurrent();
+  } catch (err) {
+    showManualError(`创建失败：${err.message || err}`);
+  } finally {
+    $('#manual-create').disabled = false;
+  }
+}
+
+function showManualError(msg) {
+  const el = $('#manual-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
 }
 
 // ---- init project modal --------------------------------------------------
