@@ -111,6 +111,27 @@
     </div>
   </div>
 
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-card small-card">
+      <h2>设置</h2>
+      <label class="field">项目库目录
+        <div class="settings-row">
+          <input id="settings-workspace" type="text" readonly />
+          <button id="settings-pick-workspace" class="ghost" type="button">选择</button>
+        </div>
+      </label>
+      <label class="field">快速捕获快捷键
+        <input id="settings-hotkey" type="text" placeholder="CommandOrControl+Shift+Space" />
+        <span class="hint">示例：CommandOrControl+Shift+Space、Alt+Space、Control+Alt+W</span>
+      </label>
+      <div class="modal-actions">
+        <button id="settings-cancel" class="ghost">取消</button>
+        <button id="settings-save" class="primary">保存</button>
+      </div>
+      <div id="settings-error" class="modal-error hidden"></div>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
 
   <script src="main.js"></script>

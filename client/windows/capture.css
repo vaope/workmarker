@@ -21,8 +21,7 @@ button { font-family: inherit; cursor: pointer; }
   border: 1px solid var(--border); border-radius: 12px; }
 .cap-head { display: flex; align-items: center; gap: 10px; }
 .cap-title { font-weight: 700; }
-.cap-project { flex: 1; background: var(--panel); border: 1px solid var(--border); color: var(--text);
-  border-radius: 7px; padding: 5px 8px; max-width: 240px; }
+.cap-route { flex: 1; color: var(--text-faint); font-size: 12px; }
 .cap-esc { color: var(--text-faint); font-size: 12px; }
 
 #cap-input {
@@ -56,6 +55,7 @@ button { font-family: inherit; cursor: pointer; }
 .ccc-grid { display: grid; grid-template-columns: 52px 1fr; gap: 6px 10px; font-size: 13px; margin-bottom: 12px; }
 .ccc-grid .k { color: var(--text-faint); }
 .ccc-grid .v { color: var(--text); word-break: break-word; }
+.ccc-grid .route-reason { color: var(--text-dim); font-size: 12px; }
 .ccc-grid select, .ccc-grid input { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 5px 7px; width: 100%; }
 .ccc-actions { display: flex; gap: 8px; justify-content: flex-end; }
 

@@ -15,6 +15,7 @@ from workeventagent.gui import (
     handle_create_item,
     handle_create_task,
     handle_propose,
+    handle_route_propose,
     handle_commit,
     handle_projects,
     handle_tasks,
@@ -158,6 +159,25 @@ class WorkMapParserTest(unittest.TestCase):
         self.assertIn("kv-cache-blockers", task_ids)
         self.assertIn("kv-cache-fundamentals", task_ids)
 
+    def test_preserves_task_before_next_empty_item(self):
+        text = """## Work Map
+
+### Item: First Item <!-- item:first-item -->
+
+#### Task: Existing Task <!-- task:existing-task -->
+- status: in_progress
+- next_action: Keep this task
+- last_event_id:
+
+### Item: New Empty Item <!-- item:new-empty-item -->
+
+## Timeline
+"""
+
+        tasks = _parse_work_map_tasks(text)
+
+        self.assertEqual([task["task_id"] for task in tasks], ["existing-task"])
+
 
 class AttachmentsTaskIdsTest(unittest.TestCase):
     def test_extracts_task_ids_from_attachments(self):
@@ -267,6 +287,89 @@ class ProposeTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         p = result["proposal"]
         self.assertEqual(p["target"]["task_id"], "kv-cache-blockers-2")
+
+
+class RouteProposeTest(unittest.TestCase):
+    def _archive_output(self, project_id: str) -> str:
+        return json.dumps({
+            "target": {
+                "project_id": project_id,
+                "item_id": "item-a",
+                "task_id": "task-a",
+            },
+            "confidence": 0.91,
+            "reason": "Matched.",
+            "event": {
+                "task_id": "task-a",
+                "input_text": "input",
+                "summary": "summary",
+                "status": "in_progress",
+                "next_action": "next",
+            },
+            "attachment_paths": [],
+        })
+
+    def test_route_propose_fails_when_workspace_has_no_projects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = handle_route_propose({
+                "workspace": tmp,
+                "text": "input",
+            })
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kind"], "no_project")
+
+    @patch("workeventagent.gui.run_project_router")
+    @patch("workeventagent.gui.run_archivist")
+    def test_route_propose_single_project_skips_router(self, run_archivist, run_project_router):
+        run_archivist.return_value = self._archive_output("project-a")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            db_path = workspace / "index.sqlite"
+            handle_init({
+                "workspace": str(workspace),
+                "title": "Project A",
+                "project_id": "project-a",
+                "db_path": str(db_path),
+                "items": [],
+            })
+
+            result = handle_route_propose({
+                "workspace": str(workspace),
+                "text": "input",
+            })
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["selected_project"]["project_id"], "project-a")
+        run_project_router.assert_not_called()
+
+    @patch("workeventagent.gui.run_project_router")
+    @patch("workeventagent.gui.run_archivist")
+    def test_route_propose_uses_router_selected_project(self, run_archivist, run_project_router):
+        run_project_router.return_value = '{"project_id":"project-b","confidence":0.82,"reason":"matched B"}'
+        run_archivist.return_value = self._archive_output("project-b")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            db_path = workspace / "index.sqlite"
+            for project_id in ("project-a", "project-b"):
+                handle_init({
+                    "workspace": str(workspace),
+                    "title": project_id,
+                    "project_id": project_id,
+                    "db_path": str(db_path),
+                    "items": [],
+                })
+
+            result = handle_route_propose({
+                "workspace": str(workspace),
+                "text": "input for B",
+            })
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["selected_project"]["project_id"], "project-b")
+        self.assertEqual(result["route"]["confidence"], 0.82)
+        called_project_path = Path(run_archivist.call_args.args[1])
+        self.assertEqual(called_project_path.name, "project-b.md")
 
 
 # ── commit ───────────────────────────────────────────────

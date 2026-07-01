@@ -1,7 +1,7 @@
 // capture.js (renderer) — quick-capture floating window logic.
 const $ = (s) => document.querySelector(s);
 
-const state = { config: null, projects: [], pending: [], proposal: null, busy: false };
+const state = { config: null, projects: [], pending: [], proposal: null, selectedProject: null, busy: false };
 
 async function boot() {
   state.config = await wea.getConfig();
@@ -14,22 +14,10 @@ async function boot() {
 
 async function loadProjects() {
   const res = await wea.listProjects();
-  const sel = $('#cap-project');
-  const prev = sel.value;
-  sel.innerHTML = '';
   if (res && res.ok && res.projects && res.projects.length) {
     state.projects = res.projects;
-    res.projects.forEach((p) => {
-      const o = document.createElement('option');
-      o.value = p.path; o.textContent = p.title || p.project_id;
-      sel.appendChild(o);
-    });
-    if (prev) sel.value = prev;
   } else {
     state.projects = [];
-    const o = document.createElement('option');
-    o.value = ''; o.textContent = '（无项目，请先在主窗口创建）';
-    sel.appendChild(o);
   }
 }
 
@@ -51,6 +39,7 @@ function reset() {
   $('.cap-foot') && $('.cap-foot').classList.remove('hidden');
   state.pending = [];
   state.proposal = null;
+  state.selectedProject = null;
   renderThumbs();
   setStatus('');
   loadProjects();
@@ -92,17 +81,18 @@ function renderThumbs() {
 async function submit() {
   if (state.busy) return;
   const text = $('#cap-input').value.trim();
-  const projectPath = $('#cap-project').value;
   if (!text) { setStatus('请输入进展内容', 'error'); return; }
-  if (!projectPath) { setStatus('请先在主窗口创建项目', 'error'); return; }
+  if (!state.projects.length) await loadProjects();
+  if (!state.projects.length) { setStatus('请先在主窗口创建项目', 'error'); return; }
   state.busy = true;
-  setStatus('正在解析…调用 opencode（约 10 秒）', 'loading');
+  setStatus('正在判断项目并解析…调用 opencode（约 10-30 秒）', 'loading');
   try {
-    const res = await wea.propose(text, projectPath, state.pending.map((p) => p.tempPath));
+    const res = await wea.routePropose(text, state.pending.map((p) => p.tempPath));
     if (!res || !res.ok) { setStatus(`解析失败：${(res && res.error) || '后端未就绪'}`, 'error'); return; }
     state.proposal = res.proposal;
+    state.selectedProject = res.selected_project;
     setStatus('');
-    renderConfirm(res.proposal, !!res.low_confidence, projectPath);
+    renderConfirm(res.proposal, !!res.low_confidence, res.selected_project, res.route);
   } catch (err) {
     setStatus(`出错：${err.message || err}`, 'error');
   } finally {
@@ -110,14 +100,18 @@ async function submit() {
   }
 }
 
-function renderConfirm(proposal, lowConf, projectPath) {
+function renderConfirm(proposal, lowConf, selectedProject, route) {
+  if (!selectedProject || !selectedProject.path) {
+    setStatus('项目判断失败，请重试或在主窗口归档', 'error');
+    return;
+  }
   $('#cap-input-area').classList.add('hidden');
   const card = $('#cap-confirm');
   const e = proposal.event;
   const t = proposal.target;
   const conf = Math.round((proposal.confidence || 0) * 100);
-  const proj = state.projects.find((p) => p.path === projectPath);
-  const projTitle = (proj && proj.title) || t.project_id;
+  const projTitle = (selectedProject && selectedProject.title) || t.project_id;
+  const routeReason = route && route.reason ? esc(route.reason) : '';
   const taskLabel = t.new_task ? `${esc(t.task_title)}（新建）` : esc(t.task_id);
 
   card.innerHTML =
@@ -126,6 +120,7 @@ function renderConfirm(proposal, lowConf, projectPath) {
     (lowConf ? '<div class="ccc-warn">不太确定，请检查后确认。</div>' : '') +
     `<div class="ccc-grid">
        <span class="k">项目</span><span class="v">${esc(projTitle)}</span>
+       ${routeReason ? `<span class="k">依据</span><span class="v route-reason">${routeReason}</span>` : ''}
        <span class="k">任务</span><span class="v">${taskLabel}</span>
        <span class="k">状态</span>
        <select id="ccc-status">
@@ -142,7 +137,7 @@ function renderConfirm(proposal, lowConf, projectPath) {
      </div>`;
   card.classList.remove('hidden');
   $('#ccc-cancel').addEventListener('click', () => { $('#cap-confirm').classList.add('hidden'); $('#cap-input-area').classList.remove('hidden'); resize(); });
-  $('#ccc-confirm').addEventListener('click', () => commit(projectPath));
+  $('#ccc-confirm').addEventListener('click', () => commit(selectedProject.path));
   resize();
 }
 

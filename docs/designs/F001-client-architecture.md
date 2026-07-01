@@ -37,7 +37,7 @@ Electron 客户端 (client/)
          │
          ▼
   Python GUI backend (workeventagent/gui.py + registry.py)
-    propose / commit / projects / tasks / timeline / init / create_item / create_task
+    propose / route_propose / commit / projects / tasks / timeline / init / create_item / create_task
     复用 → opencode_runner / markdown_store / index_store / ids / models
          │
          ▼
@@ -77,6 +77,30 @@ Electron 客户端 (client/)
 - `low_confidence = confidence < 0.7`（UX spec：<70% 走下拉修正，不直接拒绝；阈值判定交给前端，backend 只给标记 + 原始 confidence）。
 - `event_id` 在此阶段生成并固定，commit 时原样使用。
 响应失败：`kind ∈ {"opencode_error","parse_error"}`。
+
+### 3.1a route_propose — 快速捕获自动选择项目
+
+请求：`{"workspace":"D:/worklogs","text":"今天看了 KV cache 阻塞点","attachments":["C:/Temp/wea/pending/a.png"]}`
+
+处理：
+1. 扫描 workspace 下所有 `work_project` Markdown。
+2. 若只有一个项目，直接选择该项目。
+3. 若有多个项目，生成项目索引临时 Markdown（项目名、project_id、路径、Item/Task/next_action 摘要），调用 `workevent-router` agent 选择一个既有 `project_id`。
+4. 用选中的项目调用原有 `propose`，不重写归档逻辑。
+
+响应：与 `propose` 相同，额外包含：
+
+```json
+{
+  "selected_project": {"project_id":"...","title":"...","path":"..."},
+  "route": {"project_id":"...","confidence":0.86,"reason":"..."}
+}
+```
+
+约束：
+- 不创建新项目；无项目返回 `{"ok":false,"kind":"no_project"}`。
+- route confidence < 0.7 时，前端把整体确认卡片标为低置信度。
+- 该命令主要供快速捕获窗口使用；主窗口选中项目输入仍可继续走单项目 `propose`。
 
 ### 3.2 commit — 确认后写入
 
@@ -195,6 +219,7 @@ preload 暴露（`window.wea`）：
 | 方法 | 映射 backend / 行为 |
 |---|---|
 | `propose(text, projectPath, attachments)` | gui propose |
+| `routePropose(text, attachments)` | gui route_propose（快速捕获自动选择项目） |
 | `commit(proposal, projectPath, dbPath, pendingAttachments)` | gui commit |
 | `listProjects()` | gui projects（workspace/db 由主进程从 config 注入） |
 | `listTasks(projectPath)` | gui tasks |
@@ -204,6 +229,7 @@ preload 暴露（`window.wea`）：
 | `createTask(projectPath, itemId, title)` | gui create_task |
 | `readClipboardImage()` | 主进程 clipboard.readImage → 写 temp → 返回 {tempPath, filename} 或 null |
 | `getConfig()` / `setWorkspace(path)` | config 读写 |
+| `updateConfig(patch)` | config 读写；hotkey 变化时主进程即时重新注册全局快捷键 |
 | `pickWorkspaceDir()` | dialog 选目录 |
 | `onShowCapture(cb)` | 主进程→渲染：全局热键触发 |
 | `hideCapture()` / `resizeInput(h)` | 窗口控制 |
@@ -233,13 +259,13 @@ preload 暴露（`window.wea`）：
 
 | 线 | 负责 | 内容 |
 |---|---|---|
-| A — Python backend | 金哥 | §3 八命令 + §4 registry + 附件复制 + Timeline 解析器 + unittest |
+| A — Python backend | 金哥 | §3 九命令 + §4 registry + 附件复制 + Timeline 解析器 + unittest |
 | B — Electron 前端 | 砚砚 | §5 脚手架/主进程/桥 + 主窗口 + 快速捕获窗口 |
 | 集成验收 | 砚砚 | 端到端 + 启动 + 全功能走查 |
 
 验收清单（co-creator「可直接运行」硬目标）：
 - [ ] 现有 31 Python tests 不破
-- [ ] backend 八命令各有 unittest，真实 opencode propose 产出合法 JSON
+- [ ] backend 九命令各有 unittest，真实 opencode propose 产出合法 JSON
 - [ ] `npm start` 能启动 Electron 主窗口，无报错
 - [ ] 新建项目 → 生成合规 Markdown + attachments 目录 + 入索引
 - [ ] 输入一句进展 → 确认卡片 → 确认 → Markdown 追加 Timeline + 更新 Work Map + SQLite 更新

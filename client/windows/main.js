@@ -13,6 +13,7 @@ const state = {
   busy: false,
   manualMode: null,     // "item" | "task"
   manualItemId: '',
+  settingsWorkspace: '',
 };
 
 // ---- boot ----------------------------------------------------------------
@@ -51,10 +52,7 @@ function bindStaticHandlers() {
     await loadProjects();
   });
 
-  $('#change-workspace').addEventListener('click', async () => {
-    const dir = await wea.pickWorkspaceDir();
-    if (dir) { state.config = await wea.setWorkspace(dir); await loadProjects(); }
-  });
+  $('#change-workspace').addEventListener('click', openSettingsModal);
 
   $('#new-project').addEventListener('click', openInitModal);
   $('#new-item').addEventListener('click', () => openManualModal('item'));
@@ -69,6 +67,9 @@ function bindStaticHandlers() {
   $('#manual-name').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); createManualEntry(); }
   });
+  $('#settings-cancel').addEventListener('click', () => $('#settings-modal').classList.add('hidden'));
+  $('#settings-pick-workspace').addEventListener('click', pickSettingsWorkspace);
+  $('#settings-save').addEventListener('click', saveSettings);
 
   // tabs
   document.querySelectorAll('.tab').forEach((tab) => {
@@ -452,6 +453,50 @@ async function createManualEntry() {
 
 function showManualError(msg) {
   const el = $('#manual-error');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+// ---- settings -------------------------------------------------------------
+function openSettingsModal() {
+  state.settingsWorkspace = (state.config && state.config.workspace) || '';
+  $('#settings-workspace').value = state.settingsWorkspace;
+  $('#settings-hotkey').value = (state.config && state.config.hotkey) || 'CommandOrControl+Shift+Space';
+  $('#settings-error').classList.add('hidden');
+  $('#settings-modal').classList.remove('hidden');
+}
+
+async function pickSettingsWorkspace() {
+  const dir = await wea.pickWorkspaceDir();
+  if (!dir) return;
+  state.settingsWorkspace = dir;
+  $('#settings-workspace').value = dir;
+}
+
+async function saveSettings() {
+  const hotkey = $('#settings-hotkey').value.trim() || 'CommandOrControl+Shift+Space';
+  const patch = { hotkey };
+  if (state.settingsWorkspace) patch.workspace = state.settingsWorkspace;
+  $('#settings-save').disabled = true;
+  try {
+    const updated = await wea.updateConfig(patch);
+    state.config = updated;
+    if (!updated.hotkeyRegistered) {
+      showSettingsError('快捷键注册失败，请换一个组合键');
+      return;
+    }
+    $('#settings-modal').classList.add('hidden');
+    toast('设置已保存', 'ok');
+    await loadProjects();
+  } catch (err) {
+    showSettingsError(`保存失败：${err.message || err}`);
+  } finally {
+    $('#settings-save').disabled = false;
+  }
+}
+
+function showSettingsError(msg) {
+  const el = $('#settings-error');
   el.textContent = msg;
   el.classList.remove('hidden');
 }

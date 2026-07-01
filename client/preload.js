@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('wea', {
   // --- backend (workspace/dbPath are injected by main from config) ---
   propose: (text, projectPath, attachments) =>
     ipcRenderer.invoke('wea:propose', { text, projectPath, attachments: attachments || [] }),
+  routePropose: (text, attachments) =>
+    ipcRenderer.invoke('wea:routePropose', { text, attachments: attachments || [] }),
   commit: (proposal, projectPath, pendingAttachments) =>
     ipcRenderer.invoke('wea:commit', { proposal, projectPath, pendingAttachments: pendingAttachments || [] }),
   listProjects: () => ipcRenderer.invoke('wea:listProjects'),
@@ -23,6 +25,7 @@ contextBridge.exposeInMainWorld('wea', {
   // --- config / dialogs ---
   getConfig: () => ipcRenderer.invoke('wea:getConfig'),
   setWorkspace: (workspace) => ipcRenderer.invoke('wea:setWorkspace', { workspace }),
+  updateConfig: (patch) => ipcRenderer.invoke('wea:updateConfig', patch || {}),
   pickWorkspaceDir: () => ipcRenderer.invoke('wea:pickWorkspaceDir'),
   openProjectDir: (projectPath) => ipcRenderer.invoke('wea:openProjectDir', { projectPath }),
 

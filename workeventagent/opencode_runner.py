@@ -16,13 +16,35 @@ class OpencodeRunnerError(Exception):
 def run_archivist(
     prompt: str, project_doc: Path, opencode_bin: str = "opencode"
 ) -> str:
+    return _run_opencode_agent(
+        prompt=prompt,
+        input_doc=project_doc,
+        agent_name="workevent-archivist",
+        opencode_bin=opencode_bin,
+    )
+
+
+def run_project_router(
+    prompt: str, routing_doc: Path, opencode_bin: str = "opencode"
+) -> str:
+    return _run_opencode_agent(
+        prompt=prompt,
+        input_doc=routing_doc,
+        agent_name="workevent-router",
+        opencode_bin=opencode_bin,
+    )
+
+
+def _run_opencode_agent(
+    prompt: str, input_doc: Path, agent_name: str, opencode_bin: str = "opencode"
+) -> str:
     cmd = [
         _resolve_executable(opencode_bin),
         "run",
         "--agent",
-        "workevent-archivist",
+        agent_name,
         "--file",
-        str(project_doc),
+        str(input_doc),
         "--format",
         "json",
         prompt,
@@ -98,6 +120,31 @@ def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
         attachment_paths=tuple(data.get("attachment_paths", [])),
     )
     return proposal
+
+
+def parse_project_route_output(raw: str, allowed_project_ids: set[str]) -> dict:
+    inner = _extract_json_text(raw)
+    try:
+        data = json.loads(inner)
+    except json.JSONDecodeError as exc:
+        raise OpencodeRunnerError(f"invalid JSON from project router: {exc}") from exc
+
+    project_id = str(data.get("project_id", "")).strip()
+    if not project_id:
+        raise OpencodeRunnerError("project router did not return project_id")
+    if project_id not in allowed_project_ids:
+        raise OpencodeRunnerError(f"project router returned unknown project_id: {project_id}")
+
+    try:
+        confidence = float(data.get("confidence", 0))
+    except (TypeError, ValueError) as exc:
+        raise OpencodeRunnerError("project router confidence is not numeric") from exc
+
+    return {
+        "project_id": project_id,
+        "confidence": confidence,
+        "reason": str(data.get("reason", "")),
+    }
 
 
 def _extract_json_text(raw: str) -> str:

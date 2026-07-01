@@ -13,6 +13,7 @@ import json as _json
 import re
 import shutil
 import sys
+import tempfile
 import traceback
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -22,7 +23,13 @@ from workeventagent.ids import make_event_id, make_stable_id, make_unique_stable
 from workeventagent.index_store import init_db, rebuild_index
 from workeventagent.markdown_store import ProjectDocument, write_project_atomically
 from workeventagent.models import ArchiveProposal, TargetRef, TimelineEvent
-from workeventagent.opencode_runner import OpencodeRunnerError, parse_archivist_output, run_archivist
+from workeventagent.opencode_runner import (
+    OpencodeRunnerError,
+    parse_archivist_output,
+    parse_project_route_output,
+    run_archivist,
+    run_project_router,
+)
 from workeventagent.registry import scan_workspace
 
 
@@ -54,6 +61,7 @@ def _main_impl() -> None:
 
     handlers = {
         "propose": handle_propose,
+        "route_propose": handle_route_propose,
         "commit": handle_commit,
         "projects": handle_projects,
         "tasks": handle_tasks,
@@ -141,6 +149,55 @@ def handle_propose(request: dict) -> dict:
 
 
 # ── commit ───────────────────────────────────────────────
+
+def handle_route_propose(request: dict) -> dict:
+    workspace = Path(request["workspace"])
+    text = request["text"]
+    attachments = request.get("attachments", [])
+
+    projects = scan_workspace(workspace)
+    if not projects:
+        return {
+            "ok": False,
+            "kind": "no_project",
+            "error": "No work projects found in the workspace.",
+        }
+
+    if len(projects) == 1:
+        selected = projects[0]
+        route = {
+            "project_id": selected["project_id"],
+            "confidence": 1.0,
+            "reason": "Only one project exists in the workspace.",
+        }
+    else:
+        allowed_project_ids = {p["project_id"] for p in projects}
+        with tempfile.TemporaryDirectory(prefix="wea-router-") as tmp:
+            routing_doc = Path(tmp) / "project-index.md"
+            routing_doc.write_text(_build_project_route_context(projects), encoding="utf-8")
+            raw = run_project_router(
+                f"Route this work update to one existing project:\n\n{text}",
+                routing_doc,
+            )
+        route = parse_project_route_output(raw, allowed_project_ids)
+        selected = next(p for p in projects if p["project_id"] == route["project_id"])
+
+    result = handle_propose({
+        "text": text,
+        "project_path": selected["path"],
+        "attachments": attachments,
+    })
+    if result.get("ok"):
+        result["selected_project"] = {
+            "project_id": selected["project_id"],
+            "title": selected["title"],
+            "path": selected["path"],
+        }
+        result["route"] = route
+        if route["confidence"] < 0.7:
+            result["low_confidence"] = True
+    return result
+
 
 def handle_commit(request: dict) -> dict:
     proposal_data = request["proposal"]
@@ -502,6 +559,37 @@ def _bump_updated_text(text: str, updated_date: str) -> str:
     return re.sub(r"(updated:\s*).*", rf"\g<1>{updated_date}", text, count=1)
 
 
+def _build_project_route_context(projects: list[dict]) -> str:
+    lines = [
+        "# WorkEventAgent Project Index",
+        "",
+        "Choose exactly one existing project_id for the user's update.",
+        "",
+    ]
+    for project in projects:
+        path = Path(project["path"])
+        lines.append(f"## Project: {project.get('title', '')}")
+        lines.append(f"- project_id: {project.get('project_id', '')}")
+        lines.append(f"- path: {path}")
+        lines.append(f"- open_task_count: {project.get('open_task_count', 0)}")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            lines.append("")
+            continue
+
+        for item in _parse_work_map_items(text):
+            lines.append(f"- item: {item['title']} ({item['item_id']})")
+        for task in _parse_work_map_tasks(text)[:20]:
+            next_action = task.get("next_action", "")
+            lines.append(
+                f"  - task: {task['title']} ({task['task_id']}), "
+                f"status={task.get('status', '')}, next_action={next_action}"
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
 # ── Timeline parser (new capability) ────────────────────
 
 def _parse_timeline_events(text: str) -> list[dict]:
@@ -607,6 +695,8 @@ def _parse_work_map_tasks(text: str) -> list[dict]:
         if in_work_map:
             im = item_re.match(line)
             if im:
+                if current_task:
+                    tasks.append(current_task)
                 current_item_title = im.group(1).strip()
                 current_item_id = im.group(2).strip()
                 current_task = None

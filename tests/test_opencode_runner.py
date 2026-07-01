@@ -7,13 +7,21 @@ from unittest.mock import patch
 from workeventagent.opencode_runner import (
     OpencodeRunnerError,
     parse_archivist_output,
+    parse_project_route_output,
     run_archivist,
+    run_project_router,
 )
 
 
 _EXAMPLE_NDJSON = """\
 {"type":"step_start","part":{"type":"step-start"}}
 {"type":"text","part":{"type":"text","text":"```json\\n{\\n  \\\"target\\\": {\\n    \\\"project_id\\\": \\\"multimodal-labeling\\\",\\n    \\\"item_id\\\": \\\"kv-cache-few-shot\\\",\\n    \\\"task_id\\\": \\\"kv-cache-blockers\\\",\\n    \\\"new_item\\\": false,\\n    \\\"new_task\\\": false\\n  },\\n  \\\"confidence\\\": 0.91,\\n  \\\"reason\\\": \\\"Matched KV cache item.\\\",\\n  \\\"event\\\": {\\n    \\\"event_id\\\": \\\"agent-must-not-own-this\\\",\\n    \\\"task_id\\\": \\\"kv-cache-blockers\\\",\\n    \\\"input_text\\\": \\\"Reviewed blockers.\\\",\\n    \\\"summary\\\": \\\"Prefix reuse strategy is unclear.\\\",\\n    \\\"status\\\": \\\"in_progress\\\",\\n    \\\"next_action\\\": \\\"Map current inference chain.\\\"\\n  },\\n  \\\"attachment_paths\\\": []\\n}\\n```"}}
+{"type":"step_finish","part":{"type":"step-finish"}}
+"""
+
+_EXAMPLE_ROUTE_NDJSON = """\
+{"type":"step_start","part":{"type":"step-start"}}
+{"type":"text","part":{"type":"text","text":"```json\\n{\\n  \\\"project_id\\\": \\\"project-b\\\",\\n  \\\"confidence\\\": 0.86,\\n  \\\"reason\\\": \\\"The update mentions project B details.\\\"\\n}\\n```"}}
 {"type":"step_finish","part":{"type":"step-finish"}}
 """
 
@@ -33,6 +41,22 @@ class OpencodeRunnerTest(unittest.TestCase):
         self.assertIn("run", args)
         self.assertIn("--agent", args)
         self.assertIn("workevent-archivist", args)
+        self.assertIn("--file", args)
+
+    @patch("workeventagent.opencode_runner.subprocess.run")
+    def test_run_project_router_calls_opencode_router_agent_with_file(self, run):
+        run.return_value.stdout = '{"ok": true}'
+        run.return_value.returncode = 0
+
+        with patch.object(shutil, "which", return_value=None):
+            output = run_project_router("input", Path("projects.md"), opencode_bin="opencode")
+
+        self.assertEqual(output, '{"ok": true}')
+        args = run.call_args.args[0]
+        self.assertEqual(args[0], "opencode")
+        self.assertIn("run", args)
+        self.assertIn("--agent", args)
+        self.assertIn("workevent-router", args)
         self.assertIn("--file", args)
 
     @patch("workeventagent.opencode_runner.subprocess.run")
@@ -131,6 +155,19 @@ class OpencodeRunnerTest(unittest.TestCase):
         self.assertAlmostEqual(proposal.confidence, 0.91)
         self.assertEqual(proposal.event.event_id, "wrapper-event-id")
         self.assertEqual(proposal.event.summary, "Prefix reuse strategy is unclear.")
+
+    def test_parse_project_route_output_from_ndjson(self):
+        route = parse_project_route_output(_EXAMPLE_ROUTE_NDJSON, {"project-a", "project-b"})
+
+        self.assertEqual(route["project_id"], "project-b")
+        self.assertAlmostEqual(route["confidence"], 0.86)
+        self.assertIn("project B", route["reason"])
+
+    def test_parse_project_route_output_rejects_unknown_project(self):
+        raw = '{"project_id":"missing-project","confidence":0.9,"reason":"bad"}'
+
+        with self.assertRaises(OpencodeRunnerError):
+            parse_project_route_output(raw, {"project-a"})
 
     def test_parse_archivist_output_rejects_missing_required_keys(self):
         bad = '{"target": {"project_id": "p"}}'

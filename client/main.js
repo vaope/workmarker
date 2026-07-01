@@ -103,6 +103,7 @@ function registerHotkey() {
   const accelerator = hotkey || 'CommandOrControl+Shift+Space';
   const ok = globalShortcut.register(accelerator, () => showCaptureWindow());
   if (!ok) console.error(`[wea] failed to register global hotkey: ${accelerator}`);
+  return { ok, hotkey: accelerator };
 }
 
 // --- IPC -------------------------------------------------------------------
@@ -116,6 +117,23 @@ function attachIpc() {
     const merged = saveConfig({ workspace });
     try { fs.mkdirSync(path.join(workspace, 'attachments'), { recursive: true }); } catch { /* ignore */ }
     return merged;
+  });
+
+  ipcMain.handle('wea:updateConfig', (_e, patch) => {
+    const before = loadConfig();
+    const merged = saveConfig(patch || {});
+    if (patch && Object.prototype.hasOwnProperty.call(patch, 'workspace') && patch.workspace) {
+      try { fs.mkdirSync(path.join(patch.workspace, 'attachments'), { recursive: true }); } catch { /* ignore */ }
+    }
+    const hotkeyStatus = patch && Object.prototype.hasOwnProperty.call(patch, 'hotkey')
+      ? registerHotkey()
+      : null;
+    if (hotkeyStatus && !hotkeyStatus.ok) {
+      const reverted = saveConfig({ hotkey: before.hotkey });
+      registerHotkey();
+      return { ...reverted, hotkeyRegistered: false };
+    }
+    return { ...merged, hotkeyRegistered: hotkeyStatus ? hotkeyStatus.ok : true };
   });
 
   ipcMain.handle('wea:pickWorkspaceDir', async () => {
@@ -141,6 +159,16 @@ function attachIpc() {
 
   ipcMain.handle('wea:propose', async (_e, { text, projectPath, attachments }) =>
     callBackend('propose', { text, project_path: projectPath, attachments: attachments || [] }, cfg().pythonCmd));
+
+  ipcMain.handle('wea:routePropose', async (_e, { text, attachments }) => {
+    const c = cfg();
+    if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace 未设置' };
+    return callBackend('route_propose', {
+      text,
+      workspace: c.workspace,
+      attachments: attachments || [],
+    }, c.pythonCmd);
+  });
 
   ipcMain.handle('wea:commit', async (_e, { proposal, projectPath, pendingAttachments }) => {
     const c = cfg();
