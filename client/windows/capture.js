@@ -7,7 +7,12 @@ async function boot() {
   state.config = await wea.getConfig();
   bind();
   await loadProjects();
-  wea.onShowCapture(() => reset());
+  wea.onShowCapture(() => {
+    // If a confirm card is already visible (backend finished while window was hidden),
+    // don't reset — preserve it so the user can confirm.
+    if (state.proposal && !$('#cap-confirm').classList.contains('hidden')) return;
+    reset();
+  });
   wea.onArchived(() => {/* keep recent line; nothing else */});
   reset();
 }
