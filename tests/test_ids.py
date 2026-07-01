@@ -18,6 +18,14 @@ class IdTest(unittest.TestCase):
         self.assertNotEqual(blocker_id, dataset_id)
         self.assertEqual(blocker_id, make_stable_id("\u67e5\u770b\u5f53\u524d\u963b\u585e\u70b9"))
 
+    def test_stable_id_keeps_ascii_slug_for_mixed_titles(self):
+        self.assertEqual(make_stable_id("\u4f7f\u7528 KV cache \u4f18\u5316 few-shot"), "kv-cache-few-shot")
+        self.assertEqual(make_stable_id("KV cache \u4f7f\u7528\u539f\u7406\u89e3\u8bfb"), "kv-cache")
+
+    def test_stable_id_keeps_untitled_for_empty_titles(self):
+        self.assertEqual(make_stable_id(""), "untitled")
+        self.assertEqual(make_stable_id("   "), "untitled")
+
     def test_unique_stable_id_adds_suffix_on_collision(self):
         existing = {"kv-cache-few-shot", "kv-cache-few-shot-2"}
         self.assertEqual(make_unique_stable_id("KV Cache Few Shot", existing), "kv-cache-few-shot-3")

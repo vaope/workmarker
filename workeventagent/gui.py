@@ -364,13 +364,18 @@ def _generate_init_markdown(
     lines.append("## Work Map")
     lines.append("")
 
+    existing_item_ids: set[str] = set()
+    existing_task_ids: set[str] = set()
+
     for item_spec in items_spec:
         item_title = item_spec.get("title", "")
-        item_id = make_stable_id(item_title) if item_title else "untitled"
+        item_id = make_unique_stable_id(item_title, existing_item_ids)
+        existing_item_ids.add(item_id)
         lines.append(f"### Item: {item_title} <!-- item:{item_id} -->")
         lines.append("")
         for task_title in item_spec.get("tasks", []):
-            task_id = make_stable_id(task_title) if task_title else "untitled"
+            task_id = make_unique_stable_id(task_title, existing_task_ids)
+            existing_task_ids.add(task_id)
             lines.append(f"#### Task: {task_title} <!-- task:{task_id} -->")
             lines.append("- status: in_progress")
             lines.append("- next_action: ")

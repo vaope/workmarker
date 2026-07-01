@@ -1,4 +1,5 @@
 import json
+import re
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -588,6 +589,30 @@ class GenerateInitMarkdownTest(unittest.TestCase):
         self.assertIn("### Item: Item 1 <!-- item:item-1 -->", md)
         self.assertIn("#### Task: Task A <!-- task:task-a -->", md)
         self.assertIn("- status: in_progress", md)
+
+    def test_duplicate_init_titles_get_unique_anchors(self):
+        md = _generate_init_markdown(
+            "test-proj", "Test Project", "2026-07-01",
+            [
+                {
+                    "title": "\u8c03\u7814",
+                    "tasks": ["\u8c03\u7814", "\u8c03\u7814"],
+                },
+                {
+                    "title": "\u8c03\u7814",
+                    "tasks": ["\u8c03\u7814"],
+                },
+            ],
+        )
+
+        item_ids = re.findall(r"<!-- item:(.+?) -->", md)
+        task_ids = re.findall(r"<!-- task:(.+?) -->", md)
+
+        self.assertRegex(item_ids[0], r"^id-[0-9a-f]{8}$")
+        self.assertEqual(item_ids[1], f"{item_ids[0]}-2")
+        self.assertEqual(task_ids[0], item_ids[0])
+        self.assertEqual(task_ids[1], f"{task_ids[0]}-2")
+        self.assertEqual(task_ids[2], f"{task_ids[0]}-3")
 
 
 if __name__ == "__main__":
