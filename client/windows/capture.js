@@ -1,7 +1,7 @@
 // capture.js (renderer) — quick-capture floating window logic.
 const $ = (s) => document.querySelector(s);
 
-const state = { config: null, projects: [], pending: [], proposal: null, selectedProject: null, busy: false };
+const state = { config: null, projects: [], pending: [], proposal: null, selectedProject: null, busy: false, bufferedText: '' };
 
 async function boot() {
   state.config = await wea.getConfig();
@@ -40,6 +40,10 @@ function reset() {
   state.pending = [];
   state.proposal = null;
   state.selectedProject = null;
+  state.busy = false;
+  state.bufferedText = '';
+  $('#cap-submit').disabled = false;
+  $('#cap-submit').textContent = '提交';
   renderThumbs();
   setStatus('');
   loadProjects();
@@ -84,20 +88,38 @@ async function submit() {
   if (!text) { setStatus('请输入进展内容', 'error'); return; }
   if (!state.projects.length) await loadProjects();
   if (!state.projects.length) { setStatus('请先在主窗口创建项目', 'error'); return; }
+
   state.busy = true;
-  setStatus('正在判断项目并解析…调用 opencode（约 10-30 秒）', 'loading');
-  try {
-    const res = await wea.routePropose(text, state.pending.map((p) => p.tempPath));
-    if (!res || !res.ok) { setStatus(`解析失败：${(res && res.error) || '后端未就绪'}`, 'error'); return; }
-    state.proposal = res.proposal;
-    state.selectedProject = res.selected_project;
-    setStatus('');
-    renderConfirm(res.proposal, !!res.low_confidence, res.selected_project, res.route);
-  } catch (err) {
-    setStatus(`出错：${err.message || err}`, 'error');
-  } finally {
-    state.busy = false;
-  }
+  $('#cap-input').value = '';
+  $('#cap-submit').disabled = true;
+  $('#cap-submit').textContent = '⏳';
+  setStatus('正在后台解析…输入下一条可直接打字', 'loading');
+
+  // Fire-and-forget: don't block the input area
+  wea.routePropose(text, state.pending.map((p) => p.tempPath))
+    .then((res) => {
+      if (!res || !res.ok) {
+        setStatus(`解析失败：${(res && res.error) || '后端未就绪'}`, 'error');
+        state.busy = false;
+        $('#cap-submit').disabled = false;
+        $('#cap-submit').textContent = '提交';
+        return;
+      }
+      // Save whatever the user was typing before showing confirm card
+      state.bufferedText = $('#cap-input').value;
+      state.proposal = res.proposal;
+      state.selectedProject = res.selected_project;
+      setStatus('');
+      renderConfirm(res.proposal, !!res.low_confidence, res.selected_project, res.route);
+    })
+    .catch((err) => {
+      setStatus(`出错：${err.message || err}`, 'error');
+      state.busy = false;
+      $('#cap-submit').disabled = false;
+      $('#cap-submit').textContent = '提交';
+    });
+
+  resize();
 }
 
 function renderConfirm(proposal, lowConf, selectedProject, route) {
@@ -136,7 +158,18 @@ function renderConfirm(proposal, lowConf, selectedProject, route) {
        <button class="primary" id="ccc-confirm">确认归档</button>
      </div>`;
   card.classList.remove('hidden');
-  $('#ccc-cancel').addEventListener('click', () => { $('#cap-confirm').classList.add('hidden'); $('#cap-input-area').classList.remove('hidden'); resize(); });
+  $('#ccc-cancel').addEventListener('click', () => {
+    $('#cap-confirm').classList.add('hidden');
+    $('#cap-input-area').classList.remove('hidden');
+    // Restore whatever the user was typing while processing
+    $('#cap-input').value = state.bufferedText || '';
+    state.bufferedText = '';
+    state.busy = false;
+    $('#cap-submit').disabled = false;
+    $('#cap-submit').textContent = '提交';
+    setStatus('');
+    resize();
+  });
   $('#ccc-confirm').addEventListener('click', () => commit(selectedProject.path));
   resize();
 }

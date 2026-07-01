@@ -458,12 +458,52 @@ function showManualError(msg) {
 }
 
 // ---- settings -------------------------------------------------------------
+
+function _keyCodeToElectron(code, key) {
+  const map = {
+    Space: 'Space', Backspace: 'Backspace', Delete: 'Delete',
+    Enter: 'Return', Escape: 'Escape', Tab: 'Tab',
+    ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+    Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+  };
+  if (map[code]) return map[code];
+  if (/^F\d+$/.test(code)) return code;
+  if (/^Digit(\d)$/.test(code)) return code.replace('Digit', '');
+  if (/^Key([A-Z])$/.test(code)) return code.replace('Key', '');
+  if (key.length === 1) return key.toUpperCase();
+  return null;
+}
+
 function openSettingsModal() {
   state.settingsWorkspace = (state.config && state.config.workspace) || '';
   $('#settings-workspace').value = state.settingsWorkspace;
   $('#settings-hotkey').value = (state.config && state.config.hotkey) || 'CommandOrControl+Shift+Space';
   $('#settings-error').classList.add('hidden');
   $('#settings-modal').classList.remove('hidden');
+  // Re-attach keydown capture each time modal opens (prevents duplicate listeners)
+  const hotkeyInput = $('#settings-hotkey');
+  hotkeyInput.onkeydown = null; // clear previous
+  hotkeyInput.addEventListener('keydown', function _captureHotkey(e) {
+    if (e.key === 'Tab') return; // allow Tab to move focus
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      hotkeyInput.value = '';
+      e.preventDefault();
+      return;
+    }
+    // Only capture when at least one modifier is held
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const keys = [];
+    if (e.ctrlKey || e.metaKey) keys.push('CommandOrControl');
+    if (e.altKey) keys.push('Alt');
+    if (e.shiftKey) keys.push('Shift');
+    const mainKey = _keyCodeToElectron(e.code, e.key);
+    if (mainKey) {
+      keys.push(mainKey);
+      hotkeyInput.value = keys.join('+');
+    }
+  });
 }
 
 async function pickSettingsWorkspace() {
