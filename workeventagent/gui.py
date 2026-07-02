@@ -438,9 +438,9 @@ def _build_project_report(
                 "events": [],
             }
         item_tasks[item_id]["tasks"][task_id]["events"].append(ev)
-        # Update item title from any event that has one
+        # Fallback: use item_id until Work Map override supplies real title
         if not item_tasks[item_id]["title"] and ev.get("item_id"):
-            item_tasks[item_id]["title"] = ev.get("task_title", "")
+            item_tasks[item_id]["title"] = ev.get("item_id", "")
 
     # Also incorporate Work Map tasks to fill in item titles
     tasks_data = handle_tasks({"project_path": project["path"]})
