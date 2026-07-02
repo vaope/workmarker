@@ -237,11 +237,28 @@ async function commit(projectPath) {
     state.pending = [];
     const proj = state.projects.find((x) => x.path === projectPath);
     showRecent(`${(proj && proj.title) || ''} · ${p.event.summary}`);
-    setStatus('✅ 已归档，窗口即将关闭', '');
-    setTimeout(() => wea.hideCapture(), 1100);
+    restoreInputAfterArchive();
   } catch (err) {
     setStatus(`出错：${err.message || err}`, 'error');
   }
+}
+
+function restoreInputAfterArchive() {
+  $('#cap-confirm').classList.add('hidden');
+  $('#cap-input-area').classList.remove('hidden');
+  $('.cap-foot').classList.remove('hidden');
+  $('#cap-input').value = '';
+  state.proposal = null;
+  state.selectedProject = null;
+  state.busy = false;
+  state.bufferedText = '';
+  state.lastText = '';
+  $('#cap-submit').disabled = false;
+  $('#cap-submit').textContent = '提交';
+  renderThumbs();
+  setStatus('✅ 已归档，可以继续输入下一条', '');
+  setTimeout(() => $('#cap-input').focus(), 30);
+  resize();
 }
 
 function showRecent(text) {
