@@ -1,16 +1,15 @@
 // capture.js (renderer) — quick-capture floating window logic.
 const $ = (s) => document.querySelector(s);
 
-const state = { config: null, projects: [], pending: [], proposal: null, selectedProject: null, busy: false, bufferedText: '' };
+const state = { config: null, projects: [], pending: [], proposal: null, selectedProject: null, busy: false, bufferedText: '', lastText: '' };
 
 async function boot() {
   state.config = await wea.getConfig();
   bind();
   await loadProjects();
   wea.onShowCapture(() => {
-    // If a confirm card is already visible (backend finished while window was hidden),
-    // don't reset — preserve it so the user can confirm.
-    if (state.proposal && !$('#cap-confirm').classList.contains('hidden')) return;
+    // If any card (confirm or error) is visible, preserve it — don't reset.
+    if (!$('#cap-confirm').classList.contains('hidden')) return;
     reset();
   });
   wea.onArchived(() => {/* keep recent line; nothing else */});
@@ -47,6 +46,7 @@ function reset() {
   state.selectedProject = null;
   state.busy = false;
   state.bufferedText = '';
+  state.lastText = '';
   $('#cap-submit').disabled = false;
   $('#cap-submit').textContent = '提交';
   renderThumbs();
@@ -95,22 +95,20 @@ async function submit() {
   if (!state.projects.length) { setStatus('请先在主窗口创建项目', 'error'); return; }
 
   state.busy = true;
+  state.lastText = text;
   $('#cap-input').value = '';
   $('#cap-submit').disabled = true;
   $('#cap-submit').textContent = '⏳';
-  setStatus('正在后台解析…输入下一条可直接打字', 'loading');
+  setStatus('正在后台解析…', 'loading');
 
-  // Fire-and-forget: don't block the input area
   wea.routePropose(text, state.pending.map((p) => p.tempPath))
     .then((res) => {
       if (!res || !res.ok) {
-        setStatus(`解析失败：${(res && res.error) || '后端未就绪'}`, 'error');
-        state.busy = false;
-        $('#cap-submit').disabled = false;
-        $('#cap-submit').textContent = '提交';
+        const msg = (res && res.error) || '后端未就绪';
+        const kind = (res && res.kind) || '';
+        renderError(msg, kind);
         return;
       }
-      // Save whatever the user was typing before showing confirm card
       state.bufferedText = $('#cap-input').value;
       state.proposal = res.proposal;
       state.selectedProject = res.selected_project;
@@ -118,12 +116,42 @@ async function submit() {
       renderConfirm(res.proposal, !!res.low_confidence, res.selected_project, res.route);
     })
     .catch((err) => {
-      setStatus(`出错：${err.message || err}`, 'error');
-      state.busy = false;
-      $('#cap-submit').disabled = false;
-      $('#cap-submit').textContent = '提交';
+      renderError(err.message || String(err), 'crash');
     });
 
+  resize();
+}
+
+function renderError(msg, kind) {
+  $('#cap-input-area').classList.add('hidden');
+  $('.cap-foot').classList.add('hidden');
+
+  const hint = kind === 'no_project'
+    ? '请先在主窗口中创建或打开一个项目。'
+    : kind === 'no_workspace'
+    ? '请先在主窗口设置中配置项目库目录。'
+    : '请检查后端是否正常运行，然后重试。';
+
+  const card = $('#cap-confirm');
+  card.innerHTML =
+    `<div class="ccc-head"><h3>❌ 解析失败</h3></div>
+     <div class="ccc-warn">${esc(msg)}</div>
+     <div class="ccc-grid"><span class="v" style="color:var(--text-dim);font-size:13px;">${hint}</span></div>
+     <div class="ccc-actions">
+       <button class="ghost" id="ccc-retry">🔁 重试</button>
+     </div>`;
+  card.classList.remove('hidden');
+  $('#ccc-retry').addEventListener('click', () => {
+    card.classList.add('hidden');
+    $('#cap-input-area').classList.remove('hidden');
+    $('.cap-foot').classList.remove('hidden');
+    $('#cap-input').value = state.lastText || '';
+    state.busy = false;
+    $('#cap-submit').disabled = false;
+    $('#cap-submit').textContent = '提交';
+    setStatus('');
+    resize();
+  });
   resize();
 }
 
