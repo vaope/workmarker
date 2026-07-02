@@ -26,7 +26,8 @@ from workeventagent.gui import (
     handle_timeline,
     handle_init,
 )
-from workeventagent.index_store import get_task
+from workeventagent.markdown_store import write_project_atomically
+from workeventagent.index_store import get_task, init_db, rebuild_index
 
 FIXTURE = Path("tests/fixtures/multimodal-labeling.md")
 
@@ -1004,6 +1005,64 @@ class DeleteTaskTest(unittest.TestCase):
             })
             after = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
             self.assertEqual([t["task_id"] for t in after], [task_a2])
+        finally:
+            tmp.cleanup()
+
+    def test_delete_task_non_canonical_layout_no_orphans(self):
+        """F-b regression: delete must not leave orphan lines when task block
+        is non-canonical (e.g. multi-line next_action)."""
+        tmp = tempfile.TemporaryDirectory()
+        ws = Path(tmp.name)
+        db = ws / "index.sqlite"
+        try:
+            init = handle_init({
+                "workspace": str(ws), "title": "MultiLine Test", "project_id": "ml-test",
+                "db_path": str(db), "items": [
+                    {"title": "Item A", "tasks": ["Canonical Task"]},
+                ],
+            })
+            proj = Path(init["project_path"])
+
+            # Manually inject a non-canonical task with multi-line next_action
+            text = proj.read_text(encoding="utf-8")
+            non_canonical = (
+                "#### Task: Multi-line Task <!-- task:ml-t1 -->\n"
+                "- status: in_progress\n"
+                "- next_action: |\n"
+                "  Line 1 of action\n"
+                "  Line 2 of action\n"
+                "- last_event_id:\n"
+                "\n"
+            )
+            # Insert before the end of Work Map (before ## Decisions or EOF)
+            text = text.replace("## Decisions", non_canonical + "## Decisions")
+            write_project_atomically(proj, text)
+            init_db(db)
+            rebuild_index(db, [proj])
+
+            # Verify parser can read both tasks
+            after_init = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            self.assertEqual(len(after_init), 2)
+
+            # Delete the non-canonical task
+            result = handle_delete_task({
+                "project_path": str(proj), "db_path": str(db), "task_id": "ml-t1",
+            })
+            self.assertTrue(result["ok"])
+
+            # Verify: no orphan lines (no "Line 1 of action" / "Line 2 of action")
+            text_after = proj.read_text(encoding="utf-8")
+            self.assertNotIn("Line 1 of action", text_after,
+                             "orphan line from multi-line next_action should be removed")
+            self.assertNotIn("Line 2 of action", text_after,
+                             "orphan line from multi-line next_action should be removed")
+            self.assertNotIn("<!-- task:ml-t1 -->", text_after,
+                             "task anchor must be removed")
+
+            # Parser must still see the canonical task
+            after_del = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            self.assertEqual(len(after_del), 1)
+            self.assertEqual(after_del[0]["title"], "Canonical Task")
         finally:
             tmp.cleanup()
 

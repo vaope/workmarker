@@ -535,7 +535,8 @@ def handle_delete_task(request: dict) -> dict:
 def _delete_task_block(text: str, task_id: str) -> str:
     """Delete a single task block from the Work Map.
 
-    Task block = heading line + 3 sub-item lines (- status/next_action/last_event_id).
+    Detects the block boundary structurally (next #### Task: / ### Item: / ## ),
+    same as _delete_item_block — not a fixed line-count offset.
     Timeline events referencing this task_id are preserved.
     """
     task_anchor = f"<!-- task:{task_id} -->"
@@ -549,15 +550,24 @@ def _delete_task_block(text: str, task_id: str) -> str:
     if start_idx is None:
         raise ValueError(f"Task anchor not found: {task_anchor}")
 
-    # Task block: heading + exactly 3 sub-item lines (status, next_action, last_event_id)
-    # followed by a blank line
-    end_idx = start_idx + 4  # heading + 3 sub-items
-    # If there's a trailing blank line, include it
-    if end_idx < len(lines) and lines[end_idx].strip() == "":
-        end_idx += 1
-    end_idx = min(end_idx, len(lines))
+    # Find end: next heading (#### Task:, ### Item:) or next ## section boundary
+    end_idx = len(lines)
+    for i in range(start_idx + 1, len(lines)):
+        stripped = lines[i].strip()
+        if (stripped.startswith("#### Task:") or
+                stripped.startswith("### Item:") or
+                stripped.startswith("## ")):
+            end_idx = i
+            break
 
-    result = "".join(lines[:start_idx]) + "".join(lines[end_idx:])
+    # Build result, trimming trailing blanks before the next heading
+    result_lines = lines[:start_idx]
+    while result_lines and result_lines[-1].strip() == "":
+        result_lines.pop()
+    result_lines.append("\n")
+    result_lines.extend(lines[end_idx:])
+
+    result = "".join(result_lines)
     return _bump_updated_text(
         result, datetime.now(timezone.utc).strftime("%Y-%m-%d")
     )
