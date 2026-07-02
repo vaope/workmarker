@@ -87,9 +87,7 @@ def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
     _validate_required_keys(data)
 
     ev = data["event"]
-    status = ev.get("status", "in_progress")
-    if status not in ("in_progress", "done"):
-        raise OpencodeRunnerError(f"invalid status: {status!r}")
+    status = _normalize_status(ev.get("status", "in_progress"))
 
     target = data["target"]
 
@@ -120,6 +118,22 @@ def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
         attachment_paths=tuple(data.get("attachment_paths", [])),
     )
     return proposal
+
+
+def _normalize_status(raw_status: object) -> str:
+    status = str(raw_status).strip().lower().replace("-", " ").replace("_", " ")
+    aliases = {
+        "in progress": "in_progress",
+        "ongoing": "in_progress",
+        "active": "in_progress",
+        "done": "done",
+        "complete": "done",
+        "completed": "done",
+        "finished": "done",
+    }
+    if status in aliases:
+        return aliases[status]
+    raise OpencodeRunnerError(f"invalid status: {raw_status!r}")
 
 
 def parse_project_route_output(raw: str, allowed_project_ids: set[str]) -> dict:

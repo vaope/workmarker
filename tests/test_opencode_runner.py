@@ -188,6 +188,19 @@ class OpencodeRunnerTest(unittest.TestCase):
         proposal = parse_archivist_output(raw, "event-1")
         self.assertEqual(proposal.event.event_id, "event-1")
 
+    def test_parse_archivist_output_normalizes_completed_status(self):
+        raw = """\
+{
+  "target": {"project_id": "p", "item_id": "i", "task_id": "t"},
+  "confidence": 0.9,
+  "reason": "ok",
+  "event": {"task_id": "t", "input_text": "input", "summary": "summary", "status": "completed", "next_action": ""}
+}
+"""
+        proposal = parse_archivist_output(raw, "event-1")
+
+        self.assertEqual(proposal.event.status, "done")
+
     def test_parse_archivist_output_rejects_invalid_status(self):
         raw = """\
 {

@@ -37,3 +37,7 @@ Required JSON shape:
 
 Do NOT output `markdown_preview` or `event_id` — the wrapper owns Markdown rendering
 and event ID generation deterministically.
+
+Status values are strictly limited to:
+- `in_progress` for anything still ongoing, waiting, blocked, or needing a next action.
+- `done` for completed/finished work. Do not output `completed`, `complete`, or other synonyms.
