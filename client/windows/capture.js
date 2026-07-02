@@ -1,15 +1,25 @@
 // capture.js (renderer) — quick-capture floating window logic.
 const $ = (s) => document.querySelector(s);
 
-const state = { config: null, projects: [], pending: [], proposal: null, selectedProject: null, busy: false, bufferedText: '', lastText: '' };
+const state = {
+  config: null,
+  projects: [],
+  pending: [],
+  proposal: null,
+  selectedProject: null,
+  busy: false,
+  phase: 'input',
+  bufferedText: '',
+  lastText: '',
+};
 
 async function boot() {
   state.config = await wea.getConfig();
   bind();
   await loadProjects();
   wea.onShowCapture(() => {
-    // If processing/result/error state is active, preserve it across hide/show.
-    if (state.busy || !$('#cap-confirm').classList.contains('hidden')) return;
+    // Non-input phases carry user-visible state and must survive hide/show.
+    if (state.phase !== 'input') return;
     reset();
   });
   wea.onArchived(() => {/* keep recent line; nothing else */});
@@ -37,23 +47,64 @@ function bind() {
 }
 
 function reset() {
-  $('#cap-input').value = '';
-  $('#cap-confirm').classList.add('hidden');
-  $('#cap-input-area').classList.remove('hidden');
-  $('.cap-foot') && $('.cap-foot').classList.remove('hidden');
-  state.pending = [];
-  state.proposal = null;
-  state.selectedProject = null;
-  state.busy = false;
-  state.bufferedText = '';
-  state.lastText = '';
-  $('#cap-submit').disabled = false;
-  $('#cap-submit').textContent = '提交';
-  renderThumbs();
-  setStatus('');
+  setCaptureState('input', { clearInput: true, clearAttachments: true, status: '' });
   loadProjects();
   setTimeout(() => $('#cap-input').focus(), 30);
   resize();
+}
+
+function setCaptureState(phase, data = {}) {
+  state.phase = phase;
+  $('#cap-input-area').classList.remove('hidden');
+  $('.cap-foot') && $('.cap-foot').classList.remove('hidden');
+
+  if (phase === 'input') {
+    $('#cap-confirm').classList.add('hidden');
+    if (data.clearInput) $('#cap-input').value = '';
+    if (data.clearAttachments) state.pending = [];
+    state.proposal = null;
+    state.selectedProject = null;
+    state.busy = false;
+    state.bufferedText = '';
+    state.lastText = '';
+    $('#cap-submit').disabled = false;
+    $('#cap-submit').textContent = '提交';
+    renderThumbs();
+    setStatus(data.status || '');
+    resize();
+    return;
+  }
+
+  if (phase === 'processing') {
+    state.busy = true;
+    state.lastText = data.text || '';
+    $('#cap-input').value = '';
+    $('#cap-submit').disabled = true;
+    $('#cap-submit').textContent = '⏳';
+    setStatus('正在后台解析…', 'loading');
+    renderProcessing(data.text || '');
+    return;
+  }
+
+  if (phase === 'confirm') {
+    state.busy = false;
+    state.bufferedText = $('#cap-input').value;
+    state.proposal = data.proposal;
+    state.selectedProject = data.selectedProject;
+    $('#cap-submit').disabled = true;
+    $('#cap-submit').textContent = '确认中';
+    setStatus('确认卡片已生成，可以继续输入草稿', '');
+    renderConfirm(data.proposal, !!data.lowConfidence, data.selectedProject, data.route);
+    return;
+  }
+
+  if (phase === 'error') {
+    state.busy = false;
+    $('#cap-submit').disabled = false;
+    $('#cap-submit').textContent = '提交';
+    setStatus('');
+    renderError(data.message || '未知错误', data.kind || '');
+  }
 }
 
 async function handlePaste(e) {
@@ -94,30 +145,25 @@ async function submit() {
   if (!state.projects.length) await loadProjects();
   if (!state.projects.length) { setStatus('请先在主窗口创建项目', 'error'); return; }
 
-  state.busy = true;
-  state.lastText = text;
-  $('#cap-input').value = '';
-  $('#cap-submit').disabled = true;
-  $('#cap-submit').textContent = '⏳';
-  setStatus('正在后台解析…', 'loading');
-  renderProcessing(text);
+  setCaptureState('processing', { text });
 
   wea.routePropose(text, state.pending.map((p) => p.tempPath))
     .then((res) => {
       if (!res || !res.ok) {
         const msg = (res && res.error) || '后端未就绪';
         const kind = (res && res.kind) || '';
-        renderError(msg, kind);
+        setCaptureState('error', { message: msg, kind });
         return;
       }
-      state.bufferedText = $('#cap-input').value;
-      state.proposal = res.proposal;
-      state.selectedProject = res.selected_project;
-      setStatus('');
-      renderConfirm(res.proposal, !!res.low_confidence, res.selected_project, res.route);
+      setCaptureState('confirm', {
+        proposal: res.proposal,
+        selectedProject: res.selected_project,
+        route: res.route,
+        lowConfidence: res.low_confidence,
+      });
     })
     .catch((err) => {
-      renderError(err.message || String(err), 'crash');
+      setCaptureState('error', { message: err.message || String(err), kind: 'crash' });
     });
 
   resize();
@@ -140,9 +186,6 @@ function renderProcessing(text) {
 }
 
 function renderError(msg, kind) {
-  $('#cap-input-area').classList.add('hidden');
-  $('.cap-foot').classList.add('hidden');
-
   const hint = kind === 'no_project'
     ? '请先在主窗口中创建或打开一个项目。'
     : kind === 'no_workspace'
@@ -159,15 +202,10 @@ function renderError(msg, kind) {
      </div>`;
   card.classList.remove('hidden');
   $('#ccc-retry').addEventListener('click', () => {
-    card.classList.add('hidden');
-    $('#cap-input-area').classList.remove('hidden');
-    $('.cap-foot').classList.remove('hidden');
-    $('#cap-input').value = state.lastText || '';
-    state.busy = false;
-    $('#cap-submit').disabled = false;
-    $('#cap-submit').textContent = '提交';
-    setStatus('');
-    resize();
+    const retryText = state.lastText || '';
+    setCaptureState('input', { status: '' });
+    $('#cap-input').value = retryText;
+    setTimeout(() => $('#cap-input').focus(), 30);
   });
   resize();
 }
@@ -177,7 +215,6 @@ function renderConfirm(proposal, lowConf, selectedProject, route) {
     setStatus('项目判断失败，请重试或在主窗口归档', 'error');
     return;
   }
-  $('#cap-input-area').classList.add('hidden');
   const card = $('#cap-confirm');
   const e = proposal.event;
   const t = proposal.target;
@@ -209,16 +246,7 @@ function renderConfirm(proposal, lowConf, selectedProject, route) {
      </div>`;
   card.classList.remove('hidden');
   $('#ccc-cancel').addEventListener('click', () => {
-    $('#cap-confirm').classList.add('hidden');
-    $('#cap-input-area').classList.remove('hidden');
-    // Restore whatever the user was typing while processing
-    $('#cap-input').value = state.bufferedText || '';
-    state.bufferedText = '';
-    state.busy = false;
-    $('#cap-submit').disabled = false;
-    $('#cap-submit').textContent = '提交';
-    setStatus('');
-    resize();
+    setCaptureState('input', { status: '' });
   });
   $('#ccc-confirm').addEventListener('click', () => commit(selectedProject.path));
   resize();
@@ -233,32 +261,21 @@ async function commit(projectPath) {
   setStatus('正在写入…', 'loading');
   try {
     const res = await wea.commit(p, projectPath, state.pending);
-    if (!res || !res.ok) { setStatus(`写入失败：${(res && res.error) || '未知错误'}`, 'error'); return; }
-    state.pending = [];
+    if (!res || !res.ok) {
+      setCaptureState('error', { message: `写入失败：${(res && res.error) || '未知错误'}`, kind: (res && res.kind) || 'commit_error' });
+      return;
+    }
     const proj = state.projects.find((x) => x.path === projectPath);
     showRecent(`${(proj && proj.title) || ''} · ${p.event.summary}`);
     restoreInputAfterArchive();
   } catch (err) {
-    setStatus(`出错：${err.message || err}`, 'error');
+    setCaptureState('error', { message: `出错：${err.message || err}`, kind: 'commit_crash' });
   }
 }
 
 function restoreInputAfterArchive() {
-  $('#cap-confirm').classList.add('hidden');
-  $('#cap-input-area').classList.remove('hidden');
-  $('.cap-foot').classList.remove('hidden');
-  $('#cap-input').value = '';
-  state.proposal = null;
-  state.selectedProject = null;
-  state.busy = false;
-  state.bufferedText = '';
-  state.lastText = '';
-  $('#cap-submit').disabled = false;
-  $('#cap-submit').textContent = '提交';
-  renderThumbs();
-  setStatus('✅ 已归档，可以继续输入下一条', '');
+  setCaptureState('input', { clearAttachments: true, status: '✅ 已归档，可以继续输入下一条' });
   setTimeout(() => $('#cap-input').focus(), 30);
-  resize();
 }
 
 function showRecent(text) {

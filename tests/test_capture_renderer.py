@@ -262,6 +262,10 @@ def test_quick_capture_returns_to_input_after_successful_commit() -> None:
           if (elements['cap-confirm'].classList.contains('hidden')) {
             throw new Error('confirm card should be visible before committing');
           }
+          if (elements['cap-input-area'].classList.contains('hidden')) {
+            throw new Error('input area should remain visible while confirm card is pending');
+          }
+          elements['cap-input'].value = 'next draft while confirming previous archive';
           await elements['ccc-confirm'].listeners.click();
 
           if (!elements['cap-confirm'].classList.contains('hidden')) {
@@ -272,6 +276,9 @@ def test_quick_capture_returns_to_input_after_successful_commit() -> None:
           }
           if (elements['cap-submit'].disabled) {
             throw new Error('submit button should be enabled after successful commit');
+          }
+          if (elements['cap-input'].value !== 'next draft while confirming previous archive') {
+            throw new Error('next draft should survive confirming the previous archive');
           }
 
           onShowCapture();
