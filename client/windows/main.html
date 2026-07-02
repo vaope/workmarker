@@ -41,6 +41,7 @@
           <div class="tabs">
             <button class="tab active" data-view="tasks">任务视图</button>
             <button class="tab" data-view="timeline">时间线</button>
+            <button class="tab" data-view="reports">报告</button>
           </div>
           <button id="new-item" class="ghost small">+ 新建需求</button>
         </div>
@@ -53,6 +54,22 @@
 
       <section id="timeline-view" class="view hidden">
         <div id="timeline-body" class="scroll-body"></div>
+      </section>
+
+      <section id="reports-view" class="view hidden">
+        <div class="report-toolbar">
+          <select id="report-type">
+            <option value="daily">日报</option>
+            <option value="weekly">周报</option>
+            <option value="quarterly">季报</option>
+            <option value="semi_annual">半年报</option>
+            <option value="project_summary">项目总结</option>
+          </select>
+          <input id="report-date" type="date" />
+          <button id="report-generate" class="primary small">生成报告</button>
+          <span id="report-status" class="report-status"></span>
+        </div>
+        <div id="reports-body" class="scroll-body report-body"></div>
       </section>
 
       <!-- 确认卡片（浮于输入条上方） -->

@@ -251,6 +251,16 @@ function attachIpc() {
     }, c.pythonCmd);
   });
 
+  ipcMain.handle('wea:generateReport', async (_e, { type, projectId, date }) => {
+    const c = cfg();
+    return callBackend('generate_report', {
+      workspace: c.workspace,
+      type: type || 'daily',
+      project_id: projectId || null,
+      date: date || null,
+    }, c.pythonCmd);
+  });
+
   ipcMain.handle('wea:readClipboardImage', async () => {
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;

@@ -16,7 +16,7 @@ import sys
 import tempfile
 import traceback
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from workeventagent.ids import make_event_id, make_stable_id, make_unique_stable_id
@@ -73,6 +73,7 @@ def _main_impl() -> None:
         "delete_task": handle_delete_task,
         "update_item": handle_update_item,
         "update_task": handle_update_task,
+        "generate_report": handle_generate_report,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -373,6 +374,205 @@ def handle_timeline(request: dict) -> dict:
         })
 
     return {"ok": True, "events": result_events}
+
+
+# ── generate_report ───────────────────────────────────────
+
+_REPORT_DATE_RANGES: dict[str, int] = {
+    "daily": 1,
+    "weekly": 7,
+    "quarterly": 90,
+    "semi_annual": 180,
+}
+
+
+def _report_title(report_type: str, anchor_date: datetime, project_title: str = "") -> str:
+    date_str = anchor_date.strftime("%Y-%m-%d")
+    type_names: dict[str, str] = {
+        "daily": f"日报 · {date_str}",
+        "weekly": f"周报 · {date_str}",
+        "quarterly": f"季报 · {date_str}",
+        "semi_annual": f"半年报 · {date_str}",
+        "project_summary": f"项目总结 · {project_title or date_str}",
+    }
+    return type_names.get(report_type, f"报告 · {date_str}")
+
+
+def _filter_events_by_range(
+    events: list[dict], date_from: datetime, date_to: datetime
+) -> list[dict]:
+    """Filter timeline events whose timestamp falls within [date_from, date_to]."""
+    result: list[dict] = []
+    for ev in events:
+        ts = ev.get("timestamp", "")
+        if not ts:
+            continue
+        try:
+            # timestamp format: 2026-07-01T15:30:00.123+08:00
+            ev_dt = datetime.fromisoformat(ts)
+        except ValueError:
+            continue
+        if date_from <= ev_dt <= date_to:
+            result.append(ev)
+    return result
+
+
+def _build_project_report(
+    project: dict, events: list[dict], report_type: str, anchor_date: datetime,
+) -> str:
+    """Build markdown report block for a single project."""
+    project_id = project.get("project_id", "")
+    title = project.get("title", project_id)
+
+    # Build per-item → per-task event summary
+    item_tasks: dict[str, dict] = {}  # item_id → {title, tasks: {task_id → {title, events[]}}}
+
+    for ev in events:
+        item_id = ev.get("item_id", "")
+        task_id = ev.get("task_id", "")
+        if item_id not in item_tasks:
+            item_tasks[item_id] = {"title": "", "tasks": {}}
+        if task_id not in item_tasks[item_id]["tasks"]:
+            item_tasks[item_id]["tasks"][task_id] = {
+                "title": ev.get("task_title", task_id),
+                "events": [],
+            }
+        item_tasks[item_id]["tasks"][task_id]["events"].append(ev)
+        # Update item title from any event that has one
+        if not item_tasks[item_id]["title"] and ev.get("item_id"):
+            item_tasks[item_id]["title"] = ev.get("task_title", "")
+
+    # Also incorporate Work Map tasks to fill in item titles
+    tasks_data = handle_tasks({"project_path": project["path"]})
+    if tasks_data.get("ok"):
+        for item in tasks_data.get("items", []):
+            iid = item["item_id"]
+            if iid in item_tasks:
+                item_tasks[iid]["title"] = item["title"]
+
+    lines: list[str] = []
+    lines.append(f"### {title}")
+    lines.append("")
+
+    if not events:
+        lines.append("*本周期无记录*")
+        lines.append("")
+        return "\n".join(lines)
+
+    # Status summary
+    done_count = sum(1 for ev in events if ev.get("status") == "done")
+    total_count = len(events)
+    lines.append(f"- 活动记录：{total_count} 条 · 已完成：{done_count}")
+    lines.append("")
+
+    for item_id, item_data in item_tasks.items():
+        item_title = item_data["title"] or item_id
+        lines.append(f"#### {item_title}")
+        for task_id, task_data in item_data["tasks"].items():
+            task_title = task_data["title"]
+            task_events = task_data["events"]
+            # Show latest status
+            latest_status = task_events[-1].get("status", "")
+            status_label = "✅ 已完成" if latest_status == "done" else "🔄 进行中"
+            lines.append(f"- **{task_title}** {status_label}")
+            for ev in task_events:
+                ev_summary = ev.get("summary", ev.get("input", ""))[:120]
+                ev_ts = ev.get("timestamp", "")[:16].replace("T", " ")
+                lines.append(f"  - {ev_ts} {ev_summary}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def handle_generate_report(request: dict) -> dict:
+    """Generate daily/weekly/quarterly/semi-annual/project-summary report.
+
+    request: {
+        "workspace": str,
+        "type": "daily"|"weekly"|"quarterly"|"semi_annual"|"project_summary",
+        "project_id": str | None,   # None = all projects
+        "date": str | None,         # ISO date YYYY-MM-DD, defaults to today
+    }
+    """
+    workspace = Path(request["workspace"])
+    report_type = request.get("type", "daily")
+    project_id = request.get("project_id")
+    date_str = request.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    if report_type not in ("daily", "weekly", "quarterly", "semi_annual", "project_summary"):
+        return {"ok": False, "kind": "invalid_input",
+                "error": f"unsupported report type: {report_type}"}
+
+    # Parse anchor date
+    try:
+        anchor_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        # End of anchor day (inclusive)
+        date_to = anchor_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+    except ValueError:
+        return {"ok": False, "kind": "invalid_input",
+                "error": f"invalid date format: {date_str}, expected YYYY-MM-DD"}
+
+    # Determine date range
+    if report_type == "project_summary":
+        date_from = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    else:
+        days = _REPORT_DATE_RANGES[report_type]
+        date_from = (anchor_date - timedelta(days=days - 1)).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+
+    # Scan workspace
+    projects = scan_workspace(workspace)
+
+    # Filter projects
+    if project_id:
+        projects = [p for p in projects if p.get("project_id") == project_id]
+    if report_type == "project_summary" and not project_id:
+        return {"ok": False, "kind": "invalid_input",
+                "error": "project_id is required for project_summary"}
+
+    # Build report
+    report_lines: list[str] = []
+    title = _report_title(report_type, anchor_date)
+    report_lines.append(f"# {title}")
+    report_lines.append("")
+    report_lines.append(f"周期：{date_from.strftime('%Y-%m-%d')} → {date_to.strftime('%Y-%m-%d')}")
+    report_lines.append("")
+
+    total_events = 0
+    project_count = 0
+
+    for project in projects:
+        try:
+            events_data = handle_timeline({"project_path": project["path"]})
+        except Exception:
+            continue  # Skip unreadable projects
+        if not events_data.get("ok"):
+            continue
+
+        all_events = events_data.get("events", [])
+        filtered = _filter_events_by_range(all_events, date_from, date_to)
+        if not filtered and report_type != "project_summary":
+            continue  # Skip projects with no events in range
+
+        project_count += 1
+        total_events += len(filtered)
+        block = _build_project_report(project, filtered, report_type, anchor_date)
+        report_lines.append(block)
+        report_lines.append("")
+
+    if project_count == 0:
+        report_lines.append("*所选周期内无活动记录*")
+        report_lines.append("")
+
+    report = "\n".join(report_lines)
+
+    return {
+        "ok": True,
+        "report": report,
+        "date_range": {"from": date_from.strftime("%Y-%m-%d"), "to": date_to.strftime("%Y-%m-%d")},
+        "project_count": project_count,
+        "event_count": total_events,
+    }
 
 
 # ── init ─────────────────────────────────────────────────

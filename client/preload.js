@@ -23,6 +23,8 @@ contextBridge.exposeInMainWorld('wea', {
     ipcRenderer.invoke('wea:updateItem', { projectPath, itemId, title }),
   updateTask: (projectPath, taskId, field, value) =>
     ipcRenderer.invoke('wea:updateTask', { projectPath, taskId, field, value }),
+  generateReport: (type, projectId, date) =>
+    ipcRenderer.invoke('wea:generateReport', { type, projectId: projectId || null, date: date || null }),
 
   // --- clipboard / attachments ---
   readClipboardImage: () => ipcRenderer.invoke('wea:readClipboardImage'),

@@ -89,6 +89,10 @@ function bindStaticHandlers() {
     if (img) { state.pending.push(img); renderThumbs(); }
     else toast('剪贴板没有图片，复制图片后再点（或直接 Ctrl+V）', 'err');
   });
+
+  // report
+  $('#report-generate').addEventListener('click', generateReport);
+  $('#report-date').value = todayStr();
 }
 
 // ---- projects ------------------------------------------------------------
@@ -160,6 +164,8 @@ function switchView(view) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
   $('#tasks-view').classList.toggle('hidden', view !== 'tasks');
   $('#timeline-view').classList.toggle('hidden', view !== 'timeline');
+  $('#reports-view').classList.toggle('hidden', view !== 'reports');
+  if (view === 'reports' && state.currentProject) { $('#report-date').value = todayStr(); }
 }
 
 // ---- tasks view ----------------------------------------------------------
@@ -789,6 +795,32 @@ function relTime(iso) {
   if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
   if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
   return `${Math.floor(diff / 86400)} 天前`;
+}
+
+// ---- reports --------------------------------------------------------------
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+async function generateReport() {
+  const type = $('#report-type').value;
+  const date = $('#report-date').value || todayStr();
+  const projectId = (type === 'project_summary' && state.currentProject)
+    ? state.currentProject.project_id : null;
+  const statusEl = $('#report-status');
+  statusEl.textContent = '生成中…';
+  try {
+    const res = await wea.generateReport(type, projectId, date);
+    if (!res || !res.ok) {
+      $('#reports-body').innerHTML = `<div class="empty">生成失败：${(res && res.error) || '未知错误'}</div>`;
+      statusEl.textContent = '';
+      return;
+    }
+    statusEl.textContent = `${res.event_count || 0} 条记录 · ${res.project_count || 0} 个项目`;
+    // Render markdown as pre for now (simple approach)
+    $('#reports-body').innerHTML = `<pre class="report-md">${esc(res.report)}</pre>`;
+  } catch (e) {
+    $('#reports-body').innerHTML = `<div class="empty">生成失败：${e.message || e}</div>`;
+    statusEl.textContent = '';
+  }
 }
 
 window.addEventListener('DOMContentLoaded', boot);

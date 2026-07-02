@@ -25,6 +25,7 @@ from workeventagent.gui import (
     handle_tasks,
     handle_timeline,
     handle_init,
+    handle_generate_report,
 )
 from workeventagent.markdown_store import write_project_atomically
 from workeventagent.index_store import get_task, init_db, rebuild_index
@@ -1282,6 +1283,97 @@ class UpdateTaskTest(unittest.TestCase):
             })
             self.assertFalse(result["ok"])
             self.assertEqual(result["kind"], "invalid_input")
+        finally:
+            tmp.cleanup()
+
+
+# ── generate_report ────────────────────────────────────────
+
+class ReportTest(unittest.TestCase):
+    def _setup(self):
+        tmp = tempfile.TemporaryDirectory()
+        ws = Path(tmp.name)
+        db = ws / "index.sqlite"
+        init = handle_init({
+            "workspace": str(ws), "title": "Report Test", "project_id": "rpt-test",
+            "db_path": str(db), "items": [
+                {"title": "Item A", "tasks": ["Task A1"]},
+            ],
+        })
+        return tmp, ws, db, Path(init["project_path"])
+
+    def _commit_event(self, proj, db, task_id, summary, event_id, status="in_progress"):
+        proposal = {
+            "target": {"project_id": "rpt-test", "item_id": "item-a", "task_id": task_id},
+            "confidence": 0.9, "reason": "test",
+            "event": {
+                "event_id": event_id, "task_id": task_id, "status": status,
+                "summary": summary, "next_action": "continue",
+                "input": "test input", "event_type": "update",
+            },
+            "attachment_paths": [],
+        }
+        return handle_commit({"proposal": proposal, "project_path": str(proj), "db_path": str(db)})
+
+    def test_generate_daily_report_with_events(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            tasks = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            task_id = tasks[0]["task_id"]
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            self._commit_event(proj, db, task_id, "Fixed a bug", f"{today.replace('-', '')}-event1")
+
+            result = handle_generate_report({
+                "workspace": str(ws), "type": "daily", "date": today,
+            })
+            self.assertTrue(result["ok"])
+            self.assertGreaterEqual(result["event_count"], 1)
+            self.assertIn("Fixed a bug", result["report"])
+            self.assertIn(today, result["report"])
+        finally:
+            tmp.cleanup()
+
+    def test_generate_daily_empty(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            result = handle_generate_report({
+                "workspace": str(ws), "type": "daily",
+                "date": "2020-01-01",
+            })
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["event_count"], 0)
+            self.assertIn("无活动记录", result["report"])
+        finally:
+            tmp.cleanup()
+
+    def test_generate_project_summary_requires_project_id(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            result = handle_generate_report({
+                "workspace": str(ws), "type": "project_summary",
+            })
+            self.assertFalse(result["ok"])
+            self.assertIn("project_id", result["error"])
+        finally:
+            tmp.cleanup()
+
+    def test_generate_rejects_invalid_type(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            result = handle_generate_report({
+                "workspace": str(ws), "type": "bogus",
+            })
+            self.assertFalse(result["ok"])
+        finally:
+            tmp.cleanup()
+
+    def test_generate_rejects_invalid_date(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            result = handle_generate_report({
+                "workspace": str(ws), "type": "daily", "date": "not-a-date",
+            })
+            self.assertFalse(result["ok"])
         finally:
             tmp.cleanup()
 
