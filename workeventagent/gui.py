@@ -588,7 +588,7 @@ def handle_update_item(request: dict) -> dict:
 def _update_item_title(text: str, item_id: str, new_title: str) -> str:
     """Rename an item — preserves the anchor id, only changes display text."""
     pattern = rf"(### Item:\s+).+?(\s*<!--\s*item:{re.escape(item_id)}\s*-->)"
-    updated = re.sub(pattern, rf"\g<1>{new_title}\g<2>", text, count=1)
+    updated = re.sub(pattern, lambda m: f"{m.group(1)}{new_title}{m.group(2)}", text, count=1)
     if updated == text:
         raise ValueError(f"Item anchor not found: <!-- item:{item_id} -->")
     return _bump_updated_text(
@@ -643,7 +643,7 @@ def _update_task_attr(text: str, task_id: str, field: str, value: str) -> str:
         # Replace display text in heading, keep anchor
         lines[task_idx] = re.sub(
             rf"(#### Task:\s+).+?(\s*<!--\s*task:{re.escape(task_id)}\s*-->)",
-            rf"\g<1>{value}\g<2>",
+            lambda m: f"{m.group(1)}{value}{m.group(2)}",
             lines[task_idx],
         )
     else:

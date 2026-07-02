@@ -1063,6 +1063,26 @@ class UpdateItemTest(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_update_item_title_with_backslash(self):
+        """Regression: titles with \\1 etc must be stored literally, not interpreted as regex backreferences."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            items = handle_tasks({"project_path": str(proj)})["items"]
+            item_id = items[0]["item_id"]
+
+            result = handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": item_id, "title": r"C:\Work\Item-1",
+            })
+
+            self.assertTrue(result["ok"])
+            text = proj.read_text(encoding="utf-8")
+            self.assertIn(r"C:\Work\Item-1", text)
+            # Anchor must not be corrupted
+            self.assertIn(f"<!-- item:{item_id} -->", text)
+        finally:
+            tmp.cleanup()
+
     def test_update_item_rejects_empty_title(self):
         tmp, ws, db, proj = self._setup()
         try:
@@ -1148,6 +1168,25 @@ class UpdateTaskTest(unittest.TestCase):
             self.assertTrue(result["ok"])
             after = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
             self.assertEqual(after[0]["next_action"], "Review spec.")
+        finally:
+            tmp.cleanup()
+
+    def test_update_task_title_with_backslash(self):
+        """Regression: titles with \\1 etc must be stored literally, not interpreted as regex backreferences."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            tasks = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            task_id = tasks[0]["task_id"]
+
+            result = handle_update_task({
+                "project_path": str(proj), "db_path": str(db),
+                "task_id": task_id, "field": "title", "value": r"Fix \1 backslash bug",
+            })
+
+            self.assertTrue(result["ok"])
+            text = proj.read_text(encoding="utf-8")
+            self.assertIn(r"Fix \1 backslash bug", text)
+            self.assertIn(f"<!-- task:{task_id} -->", text)
         finally:
             tmp.cleanup()
 
