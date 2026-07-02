@@ -8,8 +8,8 @@ async function boot() {
   bind();
   await loadProjects();
   wea.onShowCapture(() => {
-    // If any card (confirm or error) is visible, preserve it — don't reset.
-    if (!$('#cap-confirm').classList.contains('hidden')) return;
+    // If processing/result/error state is active, preserve it across hide/show.
+    if (state.busy || !$('#cap-confirm').classList.contains('hidden')) return;
     reset();
   });
   wea.onArchived(() => {/* keep recent line; nothing else */});
@@ -100,6 +100,7 @@ async function submit() {
   $('#cap-submit').disabled = true;
   $('#cap-submit').textContent = '⏳';
   setStatus('正在后台解析…', 'loading');
+  renderProcessing(text);
 
   wea.routePropose(text, state.pending.map((p) => p.tempPath))
     .then((res) => {
@@ -119,6 +120,22 @@ async function submit() {
       renderError(err.message || String(err), 'crash');
     });
 
+  resize();
+}
+
+function renderProcessing(text) {
+  const card = $('#cap-confirm');
+  card.innerHTML =
+    `<div class="ccc-head"><h3>正在解析</h3>
+       <span class="ccc-conf low">opencode</span></div>
+     <div class="cap-processing">
+       <div class="processing-spinner"></div>
+       <div>
+         <div class="processing-title">正在判断项目并生成归档预览…</div>
+         <div class="processing-text">${esc(text)}</div>
+       </div>
+     </div>`;
+  card.classList.remove('hidden');
   resize();
 }
 

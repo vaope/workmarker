@@ -58,6 +58,11 @@ button { font-family: inherit; cursor: pointer; }
 .ccc-grid .route-reason { color: var(--text-dim); font-size: 12px; }
 .ccc-grid select, .ccc-grid input { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 5px 7px; width: 100%; }
 .ccc-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.cap-processing { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start; }
+.processing-spinner { width: 18px; height: 18px; border: 2px solid rgba(59,130,246,.25); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; margin-top: 2px; }
+.processing-title { font-size: 13px; color: var(--text); margin-bottom: 4px; }
+.processing-text { font-size: 12px; color: var(--text-dim); line-height: 1.45; max-height: 38px; overflow: hidden; word-break: break-word; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
