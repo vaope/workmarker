@@ -201,7 +201,7 @@ class OpencodeRunnerTest(unittest.TestCase):
 
         self.assertEqual(proposal.event.status, "done")
 
-    def test_parse_archivist_output_rejects_invalid_status(self):
+    def test_parse_archivist_output_defaults_unknown_status_to_in_progress(self):
         raw = """\
 {
   "target": {"project_id": "p", "item_id": "i", "task_id": "t"},
@@ -210,8 +210,9 @@ class OpencodeRunnerTest(unittest.TestCase):
   "event": {"task_id": "t", "input_text": "input", "summary": "summary", "status": "blocked", "next_action": "next"}
 }
 """
-        with self.assertRaises(OpencodeRunnerError):
-            parse_archivist_output(raw, "event-1")
+        proposal = parse_archivist_output(raw, "event-1")
+
+        self.assertEqual(proposal.event.status, "in_progress")
 
     def test_parse_archivist_output_rejects_new_task_without_task_title(self):
         """🟡 new_task=true with empty task_title → OpencodeRunnerError."""

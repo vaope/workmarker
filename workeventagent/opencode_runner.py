@@ -122,18 +122,20 @@ def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
 
 def _normalize_status(raw_status: object) -> str:
     status = str(raw_status).strip().lower().replace("-", " ").replace("_", " ")
-    aliases = {
-        "in progress": "in_progress",
-        "ongoing": "in_progress",
-        "active": "in_progress",
-        "done": "done",
-        "complete": "done",
-        "completed": "done",
-        "finished": "done",
+    done_aliases = {
+        "done",
+        "complete",
+        "completed",
+        "finished",
+        "resolved",
+        "closed",
+        "abandoned",
+        "cancelled",
+        "canceled",
     }
-    if status in aliases:
-        return aliases[status]
-    raise OpencodeRunnerError(f"invalid status: {raw_status!r}")
+    if status in done_aliases:
+        return "done"
+    return "in_progress"
 
 
 def parse_project_route_output(raw: str, allowed_project_ids: set[str]) -> dict:
