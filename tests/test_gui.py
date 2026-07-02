@@ -14,6 +14,10 @@ from workeventagent.gui import (
     _generate_init_markdown,
     handle_create_item,
     handle_create_task,
+    handle_delete_item,
+    handle_delete_task,
+    handle_update_item,
+    handle_update_task,
     handle_propose,
     handle_route_propose,
     handle_commit,
@@ -812,6 +816,376 @@ class GenerateInitMarkdownTest(unittest.TestCase):
         self.assertEqual(task_ids[0], item_ids[0])
         self.assertEqual(task_ids[1], f"{task_ids[0]}-2")
         self.assertEqual(task_ids[2], f"{task_ids[0]}-3")
+
+
+# ── delete item ────────────────────────────────────────────
+
+class DeleteItemTest(unittest.TestCase):
+    def _setup(self):
+        tmp = tempfile.TemporaryDirectory()
+        ws = Path(tmp.name)
+        db = ws / "index.sqlite"
+        init = handle_init({
+            "workspace": str(ws), "title": "Delete Test", "project_id": "del-test",
+            "db_path": str(db), "items": [
+                {"title": "Item A", "tasks": ["Task A1", "Task A2"]},
+                {"title": "Item B", "tasks": ["Task B1"]},
+            ],
+        })
+        return tmp, ws, db, Path(init["project_path"])
+
+    def test_delete_item_removes_item_and_tasks(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            tasks_before = handle_tasks({"project_path": str(proj)})
+            self.assertEqual(len(tasks_before["items"]), 2)
+
+            items = tasks_before["items"]
+            item_a_id = items[0]["item_id"]
+            result = handle_delete_item({
+                "project_path": str(proj), "db_path": str(db), "item_id": item_a_id,
+            })
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["item_id"], item_a_id)
+            self.assertEqual(result["deleted_task_count"], 2)
+
+            # Verify round-trip: parser sees only Item B now
+            tasks_after = handle_tasks({"project_path": str(proj)})
+            self.assertEqual(len(tasks_after["items"]), 1)
+            self.assertEqual(tasks_after["items"][0]["item_id"], items[1]["item_id"])
+        finally:
+            tmp.cleanup()
+
+    def test_delete_item_preserves_other_items_and_tasks(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            tasks_before = handle_tasks({"project_path": str(proj)})
+            item_b_id = tasks_before["items"][1]["item_id"]
+            result = handle_delete_item({
+                "project_path": str(proj), "db_path": str(db), "item_id": item_b_id,
+            })
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["deleted_task_count"], 1)
+
+            tasks_after = handle_tasks({"project_path": str(proj)})
+            self.assertEqual(len(tasks_after["items"]), 1)
+            self.assertEqual(len(tasks_after["items"][0]["tasks"]), 2)
+        finally:
+            tmp.cleanup()
+
+    def test_delete_item_rejects_unknown_item(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            result = handle_delete_item({
+                "project_path": str(proj), "db_path": str(db), "item_id": "nonexistent",
+            })
+            self.assertFalse(result["ok"])
+        finally:
+            tmp.cleanup()
+
+    def test_delete_item_parser_round_trip_two_item_layout(self):
+        """Delete first of two items; parser must still see the second correctly."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            items = handle_tasks({"project_path": str(proj)})["items"]
+            handle_delete_item({
+                "project_path": str(proj), "db_path": str(db), "item_id": items[0]["item_id"],
+            })
+            tasks_after = handle_tasks({"project_path": str(proj)})
+            self.assertEqual(len(tasks_after["items"]), 1)
+            self.assertEqual(tasks_after["items"][0]["item_id"], items[1]["item_id"])
+            self.assertEqual(len(tasks_after["items"][0]["tasks"]), 1)
+        finally:
+            tmp.cleanup()
+
+    def test_delete_empty_item(self):
+        """Deleting an item with no tasks should work (no cascading)."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            # Create an empty item
+            r = handle_create_item({
+                "project_path": str(proj), "db_path": str(db), "title": "Empty Item",
+            })
+            empty_id = r["item_id"]
+            result = handle_delete_item({
+                "project_path": str(proj), "db_path": str(db), "item_id": empty_id,
+            })
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["deleted_task_count"], 0)
+        finally:
+            tmp.cleanup()
+
+
+# ── delete task ────────────────────────────────────────────
+
+class DeleteTaskTest(unittest.TestCase):
+    def _setup(self):
+        tmp = tempfile.TemporaryDirectory()
+        ws = Path(tmp.name)
+        db = ws / "index.sqlite"
+        init = handle_init({
+            "workspace": str(ws), "title": "Delete Test", "project_id": "del-test",
+            "db_path": str(db), "items": [
+                {"title": "Item A", "tasks": ["Task A1", "Task A2"]},
+            ],
+        })
+        return tmp, ws, db, Path(init["project_path"])
+
+    def test_delete_task_removes_only_targeted_task(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            tasks = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            self.assertEqual(len(tasks), 2)
+            target = tasks[0]["task_id"]
+
+            result = handle_delete_task({
+                "project_path": str(proj), "db_path": str(db), "task_id": target,
+            })
+
+            self.assertTrue(result["ok"])
+            after = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            self.assertEqual(len(after), 1)
+            self.assertNotEqual(after[0]["task_id"], target)
+        finally:
+            tmp.cleanup()
+
+    def test_delete_task_rejects_unknown_task(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            result = handle_delete_task({
+                "project_path": str(proj), "db_path": str(db), "task_id": "nonexistent",
+            })
+            self.assertFalse(result["ok"])
+        finally:
+            tmp.cleanup()
+
+    def test_delete_task_preserves_timeline_events(self):
+        """Timeline events referencing the deleted task should NOT be cascaded out."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            tasks = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            target = tasks[0]["task_id"]
+
+            # First, commit an event for this task so we have a timeline
+            proposal = _make_mock_proposal_data({
+                "target": {"project_id": "del-test", "item_id": "item-a", "task_id": target},
+                "event": {"task_id": target, "event_id": "20260701-ev1", "status": "in_progress",
+                          "summary": "test event", "next_action": "keep going"},
+            })
+            handle_commit({
+                "proposal": proposal, "project_path": str(proj), "db_path": str(db),
+            })
+
+            # Now delete the task
+            result = handle_delete_task({
+                "project_path": str(proj), "db_path": str(db), "task_id": target,
+            })
+            self.assertTrue(result["ok"])
+
+            # Timeline should still have the event
+            timeline = handle_timeline({"project_path": str(proj)})
+            self.assertTrue(any(e["event_id"] == "20260701-ev1" for e in timeline["events"]),
+                            "Timeline event should be preserved after task deletion")
+        finally:
+            tmp.cleanup()
+
+    def test_delete_task_parser_round_trip(self):
+        """After deleting first of two tasks, parser must still see the second."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            tasks = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            task_a1 = tasks[0]["task_id"]
+            task_a2 = tasks[1]["task_id"]
+
+            handle_delete_task({
+                "project_path": str(proj), "db_path": str(db), "task_id": task_a1,
+            })
+            after = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            self.assertEqual([t["task_id"] for t in after], [task_a2])
+        finally:
+            tmp.cleanup()
+
+
+# ── update item ────────────────────────────────────────────
+
+class UpdateItemTest(unittest.TestCase):
+    def _setup(self):
+        tmp = tempfile.TemporaryDirectory()
+        ws = Path(tmp.name)
+        db = ws / "index.sqlite"
+        init = handle_init({
+            "workspace": str(ws), "title": "Update Test", "project_id": "upd-test",
+            "db_path": str(db), "items": [
+                {"title": "Old Item Name", "tasks": ["Task X"]},
+            ],
+        })
+        return tmp, ws, db, Path(init["project_path"])
+
+    def test_update_item_renames_title_preserves_anchor(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            items = handle_tasks({"project_path": str(proj)})["items"]
+            old_title = items[0]["title"]
+            item_id = items[0]["item_id"]
+
+            result = handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": item_id, "title": "New Item Name",
+            })
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["item_id"], item_id)
+            self.assertEqual(result["title"], "New Item Name")
+
+            # Verify markdown: title changed, anchor unchanged
+            text = proj.read_text(encoding="utf-8")
+            self.assertIn("### Item: New Item Name <!-- item:" + item_id, text)
+            self.assertNotIn(old_title, text)
+
+            # Verify parser round-trip
+            after = handle_tasks({"project_path": str(proj)})["items"]
+            self.assertEqual(after[0]["item_id"], item_id)
+            self.assertEqual(after[0]["title"], "New Item Name")
+            self.assertEqual(len(after[0]["tasks"]), 1)
+        finally:
+            tmp.cleanup()
+
+    def test_update_item_rejects_unknown_item(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            result = handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": "nonexistent", "title": "Nope",
+            })
+            self.assertFalse(result["ok"])
+        finally:
+            tmp.cleanup()
+
+    def test_update_item_rejects_empty_title(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            items = handle_tasks({"project_path": str(proj)})["items"]
+            result = handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": items[0]["item_id"], "title": "   ",
+            })
+            self.assertFalse(result["ok"])
+        finally:
+            tmp.cleanup()
+
+
+# ── update task ────────────────────────────────────────────
+
+class UpdateTaskTest(unittest.TestCase):
+    def _setup(self):
+        tmp = tempfile.TemporaryDirectory()
+        ws = Path(tmp.name)
+        db = ws / "index.sqlite"
+        init = handle_init({
+            "workspace": str(ws), "title": "Update Test", "project_id": "upd-test",
+            "db_path": str(db), "items": [
+                {"title": "Item A", "tasks": ["Old Task Name"]},
+            ],
+        })
+        return tmp, ws, db, Path(init["project_path"])
+
+    def test_update_task_status(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            tasks = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            task_id = tasks[0]["task_id"]
+            self.assertEqual(tasks[0]["status"], "in_progress")
+
+            result = handle_update_task({
+                "project_path": str(proj), "db_path": str(db),
+                "task_id": task_id, "field": "status", "value": "done",
+            })
+
+            self.assertTrue(result["ok"])
+            after = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            self.assertEqual(after[0]["status"], "done")
+        finally:
+            tmp.cleanup()
+
+    def test_update_task_title(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            tasks = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            task_id = tasks[0]["task_id"]
+            old_title = tasks[0]["title"]
+
+            result = handle_update_task({
+                "project_path": str(proj), "db_path": str(db),
+                "task_id": task_id, "field": "title", "value": "New Task Name",
+            })
+
+            self.assertTrue(result["ok"])
+            # Verify anchor preserved, title changed
+            text = proj.read_text(encoding="utf-8")
+            self.assertIn(f"<!-- task:{task_id} -->", text)
+            self.assertIn("New Task Name", text)
+            self.assertNotIn(f"Task: {old_title}", text)
+
+            after = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            self.assertEqual(after[0]["title"], "New Task Name")
+            self.assertEqual(after[0]["task_id"], task_id)
+        finally:
+            tmp.cleanup()
+
+    def test_update_task_next_action(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            tasks = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            task_id = tasks[0]["task_id"]
+
+            result = handle_update_task({
+                "project_path": str(proj), "db_path": str(db),
+                "task_id": task_id, "field": "next_action", "value": "Review spec.",
+            })
+
+            self.assertTrue(result["ok"])
+            after = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            self.assertEqual(after[0]["next_action"], "Review spec.")
+        finally:
+            tmp.cleanup()
+
+    def test_update_task_rejects_unknown_task(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            result = handle_update_task({
+                "project_path": str(proj), "db_path": str(db),
+                "task_id": "nonexistent", "field": "status", "value": "done",
+            })
+            self.assertFalse(result["ok"])
+        finally:
+            tmp.cleanup()
+
+    def test_update_task_rejects_invalid_field(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            tasks = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            result = handle_update_task({
+                "project_path": str(proj), "db_path": str(db),
+                "task_id": tasks[0]["task_id"], "field": "bogus", "value": "x",
+            })
+            self.assertFalse(result["ok"])
+        finally:
+            tmp.cleanup()
+
+    def test_update_task_rejects_invalid_status(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            tasks = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
+            result = handle_update_task({
+                "project_path": str(proj), "db_path": str(db),
+                "task_id": tasks[0]["task_id"], "field": "status", "value": "blocked",
+            })
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["kind"], "invalid_input")
+        finally:
+            tmp.cleanup()
 
 
 if __name__ == "__main__":

@@ -175,10 +175,22 @@ function renderTasks() {
     head.className = 'item-head';
     head.innerHTML =
       `<span class="item-head-title">${esc(item.title)}</span>` +
-      `<button class="ghost add-task-mini" type="button">+ 工作项</button>`;
+      `<span class="item-head-acts">
+         <button class="icon-btn item-edit-btn" title="重命名">✏️</button>
+         <button class="icon-btn item-del-btn" title="删除需求">🗑️</button>
+         <button class="ghost add-task-mini" type="button">+ 工作项</button>
+       </span>`;
     head.querySelector('.add-task-mini').addEventListener('click', (e) => {
       e.stopPropagation();
       openManualModal('task', item.item_id);
+    });
+    head.querySelector('.item-edit-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      promptEditItem(item);
+    });
+    head.querySelector('.item-del-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      confirmDeleteItem(item);
     });
     group.appendChild(head);
     const tasks = item.tasks || [];
@@ -204,11 +216,23 @@ function taskRow(task) {
   row.innerHTML =
     `<div class="task-top">
        <span class="task-name"><span class="dot ${st}"></span>${esc(task.title)}</span>
-       <span class="status-tag ${st}">${stLabel}</span>
+       <span class="task-acts">
+         <button class="icon-btn task-edit-btn" title="编辑">✏️</button>
+         <button class="icon-btn task-del-btn" title="删除">🗑️</button>
+         <span class="status-tag ${st}">${stLabel}</span>
+       </span>
      </div>` +
     (task.next_action ? `<div class="task-next">${esc(task.next_action)}</div>` : '') +
     (task.updated_at ? `<div class="task-updated">${esc(relTime(task.updated_at))}</div>` : '') +
     `<div class="task-timeline">${events.map(eventLine).join('') || '<div class="tl-event">暂无归档事件</div>'}</div>`;
+  row.querySelector('.task-edit-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    showTaskEditor(row, task);
+  });
+  row.querySelector('.task-del-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    confirmDeleteTask(row, task);
+  });
   row.addEventListener('click', () => row.classList.toggle('expanded'));
   return row;
 }
@@ -235,6 +259,132 @@ function renderTimeline() {
        </div>`;
     body.appendChild(row);
   });
+}
+
+// ---- inline edit / delete helpers ----------------------------------------
+
+function promptEditItem(item) {
+  const name = prompt('重命名需求：', item.title);
+  if (!name || name.trim() === '' || name.trim() === item.title) return;
+  doUpdateItem(item.item_id, name.trim());
+}
+
+async function doUpdateItem(itemId, title) {
+  try {
+    const res = await wea.updateItem(state.currentProject.path, itemId, title);
+    if (!res || !res.ok) { toast(`重命名失败：${(res && res.error) || '后端错误'}`, 'err'); return; }
+    toast('需求已重命名', 'ok');
+    await refreshCurrent();
+  } catch (err) { toast(`重命名出错：${err.message || err}`, 'err'); }
+}
+
+function confirmDeleteItem(item) {
+  const taskCount = item.tasks ? item.tasks.length : 0;
+  const msg = taskCount > 0
+    ? `删除「${item.title}」及其下 ${taskCount} 个工作项？\n\n此操作不可撤销。`
+    : `删除空需求「${item.title}」？`;
+  if (!confirm(msg)) return;
+  doDeleteItem(item.item_id);
+}
+
+async function doDeleteItem(itemId) {
+  try {
+    const res = await wea.deleteItem(state.currentProject.path, itemId);
+    if (!res || !res.ok) { toast(`删除失败：${(res && res.error) || '后端错误'}`, 'err'); return; }
+    toast('需求已删除', 'ok');
+    await refreshCurrent();
+  } catch (err) { toast(`删除出错：${err.message || err}`, 'err'); }
+}
+
+function showTaskEditor(row, task) {
+  // Remove any existing editor first
+  const existing = row.querySelector('.task-editor');
+  if (existing) { existing.remove(); return; }
+
+  const editor = document.createElement('div');
+  editor.className = 'task-editor';
+  const doneSel = task.status === 'done' ? 'selected' : '';
+  const progSel = task.status === 'in_progress' ? 'selected' : '';
+  editor.innerHTML =
+    `<div class="te-row">
+       <label>名称</label>
+       <input id="te-title" value="${esc(task.title)}" />
+     </div>
+     <div class="te-row">
+       <label>状态</label>
+       <select id="te-status">
+         <option value="in_progress" ${progSel}>进行中</option>
+         <option value="done" ${doneSel}>已完成</option>
+       </select>
+     </div>
+     <div class="te-row">
+       <label>下一步</label>
+       <input id="te-next" value="${esc(task.next_action || '')}" placeholder="下一步要做什么…" />
+     </div>
+     <div class="te-acts">
+       <button class="ghost small" id="te-cancel">取消</button>
+       <button class="primary small-btn" id="te-save">保存</button>
+     </div>`;
+  row.appendChild(editor);
+  row.classList.add('expanded');
+
+  editor.querySelector('#te-cancel').addEventListener('click', (e) => {
+    e.stopPropagation();
+    editor.remove();
+  });
+  editor.querySelector('#te-save').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const newTitle = editor.querySelector('#te-title').value.trim();
+    const newStatus = editor.querySelector('#te-status').value;
+    const newNext = editor.querySelector('#te-next').value.trim();
+    saveTaskEdits(task, newTitle, newStatus, newNext, row);
+  });
+
+  editor.addEventListener('click', (e) => e.stopPropagation());
+  editor.querySelector('#te-title').focus();
+}
+
+async function saveTaskEdits(task, newTitle, newStatus, newNext, row) {
+  const proj = state.currentProject.path;
+  const errors = [];
+
+  try {
+    if (newTitle && newTitle !== task.title) {
+      const r = await wea.updateTask(proj, task.task_id, 'title', newTitle);
+      if (!r || !r.ok) errors.push(`名称：${(r && r.error) || '失败'}`);
+    }
+    if (newStatus !== task.status) {
+      const r = await wea.updateTask(proj, task.task_id, 'status', newStatus);
+      if (!r || !r.ok) errors.push(`状态：${(r && r.error) || '失败'}`);
+    }
+    if (newNext !== (task.next_action || '')) {
+      const r = await wea.updateTask(proj, task.task_id, 'next_action', newNext);
+      if (!r || !r.ok) errors.push(`下一步：${(r && r.error) || '失败'}`);
+    }
+
+    if (errors.length) { toast(`部分更新失败：${errors.join('；')}`, 'err'); }
+    else { toast('已保存', 'ok'); }
+    await refreshCurrent();
+  } catch (err) {
+    toast(`保存出错：${err.message || err}`, 'err');
+    // Remove editor on error so user sees the original state
+    const editor = row.querySelector('.task-editor');
+    if (editor) editor.remove();
+  }
+}
+
+function confirmDeleteTask(row, task) {
+  if (!confirm(`删除工作项「${task.title}」？\n\n时间线归档记录会保留。此操作不可撤销。`)) return;
+  doDeleteTask(task.task_id, row);
+}
+
+async function doDeleteTask(taskId, row) {
+  try {
+    const res = await wea.deleteTask(state.currentProject.path, taskId);
+    if (!res || !res.ok) { toast(`删除失败：${(res && res.error) || '后端错误'}`, 'err'); return; }
+    toast('工作项已删除', 'ok');
+    await refreshCurrent();
+  } catch (err) { toast(`删除出错：${err.message || err}`, 'err'); }
 }
 
 // ---- composer / propose --------------------------------------------------

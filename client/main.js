@@ -212,6 +212,45 @@ function attachIpc() {
     }, c.pythonCmd);
   });
 
+  ipcMain.handle('wea:deleteItem', async (_e, { projectPath, itemId }) => {
+    const c = cfg();
+    return callBackend('delete_item', {
+      project_path: projectPath,
+      db_path: dbPathFor(c.workspace),
+      item_id: itemId,
+    }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:deleteTask', async (_e, { projectPath, taskId }) => {
+    const c = cfg();
+    return callBackend('delete_task', {
+      project_path: projectPath,
+      db_path: dbPathFor(c.workspace),
+      task_id: taskId,
+    }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:updateItem', async (_e, { projectPath, itemId, title }) => {
+    const c = cfg();
+    return callBackend('update_item', {
+      project_path: projectPath,
+      db_path: dbPathFor(c.workspace),
+      item_id: itemId,
+      title,
+    }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:updateTask', async (_e, { projectPath, taskId, field, value }) => {
+    const c = cfg();
+    return callBackend('update_task', {
+      project_path: projectPath,
+      db_path: dbPathFor(c.workspace),
+      task_id: taskId,
+      field,
+      value,
+    }, c.pythonCmd);
+  });
+
   ipcMain.handle('wea:readClipboardImage', async () => {
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;

@@ -69,6 +69,10 @@ def _main_impl() -> None:
         "init": handle_init,
         "create_item": handle_create_item,
         "create_task": handle_create_task,
+        "delete_item": handle_delete_item,
+        "delete_task": handle_delete_task,
+        "update_item": handle_update_item,
+        "update_task": handle_update_task,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -450,6 +454,209 @@ def handle_create_task(request: dict) -> dict:
     init_db(db_path)
     rebuild_index(db_path, [project_path])
     return {"ok": True, "item_id": item_id, "task_id": task_id, "title": title}
+
+
+# ── delete_item ────────────────────────────────────────────
+
+def handle_delete_item(request: dict) -> dict:
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    item_id = request["item_id"]
+
+    text = project_path.read_text(encoding="utf-8")
+    try:
+        updated, task_count = _delete_item_block(text, item_id)
+    except ValueError as exc:
+        return {"ok": False, "kind": "invalid_project", "error": str(exc)}
+
+    write_project_atomically(project_path, updated)
+    init_db(db_path)
+    rebuild_index(db_path, [project_path])
+    return {"ok": True, "item_id": item_id, "deleted_task_count": task_count}
+
+
+def _delete_item_block(text: str, item_id: str) -> tuple[str, int]:
+    """Delete an item and all its tasks from the Work Map section.
+
+    Returns (updated_text, deleted_task_count).
+    """
+    item_anchor = f"<!-- item:{item_id} -->"
+    lines = text.splitlines(keepends=True)
+
+    start_idx = None
+    for i, line in enumerate(lines):
+        if item_anchor in line:
+            start_idx = i
+            break
+    if start_idx is None:
+        raise ValueError(f"Item anchor not found: {item_anchor}")
+
+    # Find end: next ### Item: / #### Task: or next ## section boundary
+    end_idx = len(lines)
+    for i in range(start_idx + 1, len(lines)):
+        stripped = lines[i].strip()
+        if stripped.startswith("### Item:") or stripped.startswith("## "):
+            end_idx = i
+            break
+
+    task_count = sum(1 for j in range(start_idx, end_idx) if "<!-- task:" in lines[j])
+
+    # Build result, trimming trailing blanks before the next heading
+    result_lines = lines[:start_idx]
+    while result_lines and result_lines[-1].strip() == "":
+        result_lines.pop()
+    result_lines.append("\n")
+    result_lines.extend(lines[end_idx:])
+
+    updated = "".join(result_lines)
+    updated = _bump_updated_text(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    return updated, task_count
+
+
+# ── delete_task ────────────────────────────────────────────
+
+def handle_delete_task(request: dict) -> dict:
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    task_id = request["task_id"]
+
+    text = project_path.read_text(encoding="utf-8")
+    try:
+        updated = _delete_task_block(text, task_id)
+    except ValueError as exc:
+        return {"ok": False, "kind": "invalid_project", "error": str(exc)}
+
+    write_project_atomically(project_path, updated)
+    init_db(db_path)
+    rebuild_index(db_path, [project_path])
+    return {"ok": True, "task_id": task_id}
+
+
+def _delete_task_block(text: str, task_id: str) -> str:
+    """Delete a single task block from the Work Map.
+
+    Task block = heading line + 3 sub-item lines (- status/next_action/last_event_id).
+    Timeline events referencing this task_id are preserved.
+    """
+    task_anchor = f"<!-- task:{task_id} -->"
+    lines = text.splitlines(keepends=True)
+
+    start_idx = None
+    for i, line in enumerate(lines):
+        if task_anchor in line:
+            start_idx = i
+            break
+    if start_idx is None:
+        raise ValueError(f"Task anchor not found: {task_anchor}")
+
+    # Task block: heading + exactly 3 sub-item lines (status, next_action, last_event_id)
+    # followed by a blank line
+    end_idx = start_idx + 4  # heading + 3 sub-items
+    # If there's a trailing blank line, include it
+    if end_idx < len(lines) and lines[end_idx].strip() == "":
+        end_idx += 1
+    end_idx = min(end_idx, len(lines))
+
+    result = "".join(lines[:start_idx]) + "".join(lines[end_idx:])
+    return _bump_updated_text(
+        result, datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    )
+
+
+# ── update_item ────────────────────────────────────────────
+
+def handle_update_item(request: dict) -> dict:
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    item_id = request["item_id"]
+    title = request.get("title", "").strip()
+    if not title:
+        return {"ok": False, "kind": "invalid_input", "error": "item title is required"}
+
+    text = project_path.read_text(encoding="utf-8")
+    try:
+        updated = _update_item_title(text, item_id, title)
+    except ValueError as exc:
+        return {"ok": False, "kind": "invalid_project", "error": str(exc)}
+
+    write_project_atomically(project_path, updated)
+    init_db(db_path)
+    rebuild_index(db_path, [project_path])
+    return {"ok": True, "item_id": item_id, "title": title}
+
+
+def _update_item_title(text: str, item_id: str, new_title: str) -> str:
+    """Rename an item — preserves the anchor id, only changes display text."""
+    pattern = rf"(### Item:\s+).+?(\s*<!--\s*item:{re.escape(item_id)}\s*-->)"
+    updated = re.sub(pattern, rf"\g<1>{new_title}\g<2>", text, count=1)
+    if updated == text:
+        raise ValueError(f"Item anchor not found: <!-- item:{item_id} -->")
+    return _bump_updated_text(
+        updated, datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    )
+
+
+# ── update_task ────────────────────────────────────────────
+
+def handle_update_task(request: dict) -> dict:
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    task_id = request["task_id"]
+    # Accept any subset of {status, title, next_action}
+    field = request.get("field", "")
+    value = request.get("value", "")
+
+    valid_fields = {"status", "title", "next_action"}
+    if field not in valid_fields:
+        return {"ok": False, "kind": "invalid_input",
+                "error": f"field must be one of: {', '.join(sorted(valid_fields))}"}
+    if field == "status" and value not in ("in_progress", "done"):
+        return {"ok": False, "kind": "invalid_input",
+                "error": "status must be in_progress or done"}
+
+    text = project_path.read_text(encoding="utf-8")
+    try:
+        updated = _update_task_attr(text, task_id, field, value)
+    except ValueError as exc:
+        return {"ok": False, "kind": "invalid_project", "error": str(exc)}
+
+    write_project_atomically(project_path, updated)
+    init_db(db_path)
+    rebuild_index(db_path, [project_path])
+    return {"ok": True, "task_id": task_id, "field": field, "value": value}
+
+
+def _update_task_attr(text: str, task_id: str, field: str, value: str) -> str:
+    """Update one attribute of a task block. Preserves anchor id."""
+    task_anchor = f"<!-- task:{task_id} -->"
+    lines = text.splitlines(keepends=True)
+
+    task_idx = None
+    for i, line in enumerate(lines):
+        if task_anchor in line:
+            task_idx = i
+            break
+    if task_idx is None:
+        raise ValueError(f"Task anchor not found: {task_anchor}")
+
+    if field == "title":
+        # Replace display text in heading, keep anchor
+        lines[task_idx] = re.sub(
+            rf"(#### Task:\s+).+?(\s*<!--\s*task:{re.escape(task_id)}\s*-->)",
+            rf"\g<1>{value}\g<2>",
+            lines[task_idx],
+        )
+    else:
+        # Find the sub-item line within the next few lines
+        for j in range(task_idx + 1, min(task_idx + 5, len(lines))):
+            stripped = lines[j].strip()
+            if stripped.startswith(f"- {field}:"):
+                lines[j] = f"- {field}: {value}\n"
+                break
+
+    return _bump_updated_text(
+        "".join(lines), datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    )
 
 
 def _generate_init_markdown(

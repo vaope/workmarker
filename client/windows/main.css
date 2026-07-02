@@ -121,6 +121,8 @@ button { font-family: inherit; cursor: pointer; }
   font-size: 13px; color: var(--text-dim); font-weight: 700; margin: 0 0 8px;
   text-transform: none; display: flex; align-items: center; justify-content: space-between; gap: 10px;
 }
+.item-head-acts { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.item-head-acts .icon-btn { padding: 4px 6px; font-size: 14px; }
 .item-head-title { min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-head-title::before { content: "▾"; color: var(--text-faint); flex-shrink: 0; }
 .add-task-mini { flex-shrink: 0; padding: 4px 9px; font-size: 12px; border-radius: 7px; }
@@ -132,6 +134,9 @@ button { font-family: inherit; cursor: pointer; }
 .task-row:hover { border-color: var(--accent); }
 .task-row .task-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .task-row .task-name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.task-acts { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.task-acts .icon-btn { padding: 4px 6px; font-size: 14px; opacity: 0; transition: opacity .12s; }
+.task-row:hover .task-acts .icon-btn { opacity: 1; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .dot.in_progress { background: var(--amber); }
 .dot.done { background: var(--green); }
@@ -145,6 +150,20 @@ button { font-family: inherit; cursor: pointer; }
 .task-row.expanded .task-timeline { display: block; }
 .tl-event { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
 .tl-event .tl-time { color: var(--text-faint); }
+
+/* task inline editor */
+.task-editor {
+  margin-top: 10px; padding: 12px 14px; background: var(--bg-2);
+  border: 1px solid var(--accent); border-radius: 10px;
+}
+.te-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.te-row label { font-size: 12px; color: var(--text-faint); }
+.te-row input, .te-row select {
+  background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 7px 10px; font-size: 13px; width: 100%;
+}
+.te-acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 4px; }
+.small-btn { padding: 6px 12px; font-size: 13px; border-radius: 7px; }
 
 /* timeline view */
 .tl-row {

@@ -17,6 +17,12 @@ contextBridge.exposeInMainWorld('wea', {
   createItem: (projectPath, title) => ipcRenderer.invoke('wea:createItem', { projectPath, title }),
   createTask: (projectPath, itemId, title) =>
     ipcRenderer.invoke('wea:createTask', { projectPath, itemId, title }),
+  deleteItem: (projectPath, itemId) => ipcRenderer.invoke('wea:deleteItem', { projectPath, itemId }),
+  deleteTask: (projectPath, taskId) => ipcRenderer.invoke('wea:deleteTask', { projectPath, taskId }),
+  updateItem: (projectPath, itemId, title) =>
+    ipcRenderer.invoke('wea:updateItem', { projectPath, itemId, title }),
+  updateTask: (projectPath, taskId, field, value) =>
+    ipcRenderer.invoke('wea:updateTask', { projectPath, taskId, field, value }),
 
   // --- clipboard / attachments ---
   readClipboardImage: () => ipcRenderer.invoke('wea:readClipboardImage'),
