@@ -251,13 +251,18 @@ function attachIpc() {
     }, c.pythonCmd);
   });
 
-  ipcMain.handle('wea:generateReport', async (_e, { type, projectId, date }) => {
+  ipcMain.handle('wea:generateReport', async (_e, request) => {
     const c = cfg();
     return callBackend('generate_report', {
       workspace: c.workspace,
-      type: type || 'daily',
-      project_id: projectId || null,
-      date: date || null,
+      type: request.type || 'daily',
+      project_id: request.projectId || request.project_id || null,
+      date_from: request.dateFrom || request.date_from || request.date || null,
+      date_to: request.dateTo || request.date_to || request.date || null,
+      range_label: request.rangeLabel || request.range_label || '',
+      persist: request.persist !== false,
+      mode: request.mode || 'manual',
+      include_ai: request.includeAi !== false,
     }, c.pythonCmd);
   });
 
@@ -290,12 +295,101 @@ function attachIpc() {
     catch (e) { return { ok: false, error: String(e) }; }
   });
 
+  ipcMain.handle('wea:getReportScheduleStatus', async () => {
+    const c = cfg();
+    return { ok: true, reportSchedule: c.reportSchedule || {} };
+  });
+
   ipcMain.on('wea:hideCapture', () => { if (captureWindow) captureWindow.hide(); });
   ipcMain.on('wea:resizeCapture', (_e, height) => {
     if (!captureWindow) return;
     const [w] = captureWindow.getSize();
     captureWindow.setSize(w, Math.max(180, Math.min(680, Math.round(height))));
   });
+}
+
+// --- scheduler -------------------------------------------------------------
+
+function localDateString(d = new Date()) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function mondayOfLocalWeek(d = new Date()) {
+  const copy = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const day = copy.getDay() || 7;
+  copy.setDate(copy.getDate() - day + 1);
+  return copy;
+}
+
+function addDays(d, days) {
+  const copy = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
+let reportScheduleTimer = null;
+let reportSchedulerStartedAt = null;
+
+function startReportScheduler() {
+  if (reportScheduleTimer) clearInterval(reportScheduleTimer);
+  reportSchedulerStartedAt = new Date();
+  reportScheduleTimer = setInterval(() => {
+    runScheduledReports().catch((err) => {
+      console.error('scheduled report failed', err);
+    });
+  }, 60 * 1000);
+}
+
+function scheduledTimeForLocalDate(date, hhmm) {
+  const [hour, minute] = hhmm.split(':').map((x) => Number(x));
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour, minute, 0, 0);
+}
+
+function canRunScheduledAt(now, scheduledAt) {
+  return reportSchedulerStartedAt && reportSchedulerStartedAt <= scheduledAt && now >= scheduledAt;
+}
+
+async function runScheduledReports(now = new Date()) {
+  const c = cfg();
+  if (!c.workspace) return;
+  const schedule = c.reportSchedule || {};
+  const today = localDateString(now);
+
+  const dailyAt = scheduledTimeForLocalDate(now, schedule.dailyTime || '23:30');
+  if (schedule.dailyEnabled && canRunScheduledAt(now, dailyAt) && schedule.lastDailyRunDate !== today) {
+    const res = await callBackend('generate_report', {
+      workspace: c.workspace,
+      type: 'daily',
+      date_from: today,
+      date_to: today,
+      persist: true,
+      mode: 'scheduled',
+      include_ai: true,
+    }, c.pythonCmd);
+    saveConfig({ reportSchedule: { ...schedule, lastDailyRunDate: today, lastRunStatus: JSON.stringify(res) } });
+  }
+
+  const weekStart = mondayOfLocalWeek(now);
+  const weekEnd = addDays(weekStart, 6);
+  const weekKey = `${localDateString(weekStart)}_to_${localDateString(weekEnd)}`;
+  const weeklyOffset = schedule.weeklyDay === 0 ? 6 : Number(schedule.weeklyDay || 5) - 1;
+  const weeklyDate = addDays(weekStart, weeklyOffset);
+  const weeklyAt = scheduledTimeForLocalDate(weeklyDate, schedule.weeklyTime || '18:00');
+  if (schedule.weeklyEnabled && canRunScheduledAt(now, weeklyAt) && schedule.lastWeeklyRunKey !== weekKey) {
+    const res = await callBackend('generate_report', {
+      workspace: c.workspace,
+      type: 'weekly',
+      date_from: localDateString(weekStart),
+      date_to: localDateString(weekEnd),
+      persist: true,
+      mode: 'scheduled',
+      include_ai: true,
+    }, c.pythonCmd);
+    saveConfig({ reportSchedule: { ...schedule, lastWeeklyRunKey: weekKey, lastRunStatus: JSON.stringify(res) } });
+  }
 }
 
 // --- lifecycle -------------------------------------------------------------
@@ -316,6 +410,7 @@ if (!gotLock) {
     createCaptureWindow();
     setupTray();
     registerHotkey();
+    startReportScheduler();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createMainWindow();

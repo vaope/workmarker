@@ -10,6 +10,16 @@ const DEFAULTS = {
   workspace: '',                                   // project library root (chosen on first run)
   hotkey: 'CommandOrControl+Shift+Space',          // global quick-capture hotkey
   pythonCmd: 'python',                             // python executable used by python_bridge
+  reportSchedule: {
+    dailyEnabled: false,
+    dailyTime: '23:30',
+    weeklyEnabled: false,
+    weeklyDay: 5,
+    weeklyTime: '18:00',
+    lastDailyRunDate: '',
+    lastWeeklyRunKey: '',
+    lastRunStatus: '',
+  },
 };
 
 function loadConfig() {

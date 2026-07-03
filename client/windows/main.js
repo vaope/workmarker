@@ -27,6 +27,7 @@ async function boot() {
     await loadProjects();
   }
   wea.onArchived(() => { if (state.currentProject) refreshCurrent(); });
+  loadReportSchedule();
 }
 
 function enterSetup() {
@@ -92,7 +93,9 @@ function bindStaticHandlers() {
 
   // report
   $('#report-generate').addEventListener('click', generateReport);
-  $('#report-date').value = todayStr();
+  $('#report-save-schedule').addEventListener('click', saveReportSchedule);
+  $('#report-date-from').value = todayStr();
+  $('#report-date-to').value = todayStr();
 }
 
 // ---- projects ------------------------------------------------------------
@@ -165,7 +168,10 @@ function switchView(view) {
   $('#tasks-view').classList.toggle('hidden', view !== 'tasks');
   $('#timeline-view').classList.toggle('hidden', view !== 'timeline');
   $('#reports-view').classList.toggle('hidden', view !== 'reports');
-  if (view === 'reports' && state.currentProject) { $('#report-date').value = todayStr(); }
+  if (view === 'reports' && state.currentProject) {
+    $('#report-date-from').value = todayStr();
+    $('#report-date-to').value = todayStr();
+  }
 }
 
 // ---- tasks view ----------------------------------------------------------
@@ -802,24 +808,64 @@ function todayStr() { return new Date().toISOString().slice(0, 10); }
 
 async function generateReport() {
   const type = $('#report-type').value;
-  const date = $('#report-date').value || todayStr();
+  const dateFrom = $('#report-date-from').value || todayStr();
+  const dateTo = $('#report-date-to').value || dateFrom;
   const projectId = (type === 'project_summary' && state.currentProject)
     ? state.currentProject.project_id : null;
   const statusEl = $('#report-status');
-  statusEl.textContent = '生成中…';
+  statusEl.textContent = '生成中...';
   try {
-    const res = await wea.generateReport(type, projectId, date);
+    const res = await wea.generateReport({
+      type,
+      projectId,
+      dateFrom,
+      dateTo,
+      persist: true,
+      mode: 'manual',
+      includeAi: true,
+    });
     if (!res || !res.ok) {
-      $('#reports-body').innerHTML = `<div class="empty">生成失败：${(res && res.error) || '未知错误'}</div>`;
+      $('#reports-body').innerHTML =
+        `<div class="empty">生成失败：${esc((res && res.error) || '未知错误')}</div>`;
       statusEl.textContent = '';
       return;
     }
-    statusEl.textContent = `${res.event_count || 0} 条记录 · ${res.project_count || 0} 个项目`;
-    // Render markdown as pre for now (simple approach)
-    $('#reports-body').innerHTML = `<pre class="report-md">${esc(res.report)}</pre>`;
+    statusEl.textContent = res.skipped
+      ? '无记录，已跳过'
+      : `${res.event_count || 0} 条记录 · ${res.project_count || 0} 个项目`;
+    const pathHtml = res.written_path
+      ? `<div class="report-path">${esc(res.written_path)}</div>`
+      : '';
+    $('#reports-body').innerHTML =
+      `${pathHtml}<pre class="report-md">${esc(res.report || '')}</pre>`;
   } catch (e) {
-    $('#reports-body').innerHTML = `<div class="empty">生成失败：${e.message || e}</div>`;
+    $('#reports-body').innerHTML =
+      `<div class="empty">生成失败：${esc(e.message || String(e))}</div>`;
     statusEl.textContent = '';
+  }
+}
+
+async function saveReportSchedule() {
+  const reportSchedule = {
+    dailyEnabled: $('#report-daily-enabled').checked,
+    dailyTime: $('#report-daily-time').value || '23:30',
+    weeklyEnabled: $('#report-weekly-enabled').checked,
+    weeklyDay: Number($('#report-weekly-day').value),
+    weeklyTime: $('#report-weekly-time').value || '18:00',
+  };
+  const res = await wea.updateConfig({ reportSchedule });
+  $('#report-status').textContent = res && res.ok ? '定时设置已保存' : '定时设置保存失败';
+}
+
+async function loadReportSchedule() {
+  const res = await wea.getReportScheduleStatus();
+  if (res && res.ok && res.reportSchedule) {
+    const s = res.reportSchedule;
+    $('#report-daily-enabled').checked = s.dailyEnabled || false;
+    $('#report-daily-time').value = s.dailyTime || '23:30';
+    $('#report-weekly-enabled').checked = s.weeklyEnabled || false;
+    $('#report-weekly-day').value = String(s.weeklyDay != null ? s.weeklyDay : 5);
+    $('#report-weekly-time').value = s.weeklyTime || '18:00';
   }
 }
 

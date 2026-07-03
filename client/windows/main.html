@@ -57,16 +57,32 @@
       </section>
 
       <section id="reports-view" class="view hidden">
+        <div class="report-schedule-card">
+          <label><input id="report-daily-enabled" type="checkbox" /> 定时日报</label>
+          <input id="report-daily-time" type="time" value="23:30" />
+          <label><input id="report-weekly-enabled" type="checkbox" /> 定时周报</label>
+          <select id="report-weekly-day">
+            <option value="1">周一</option>
+            <option value="2">周二</option>
+            <option value="3">周三</option>
+            <option value="4">周四</option>
+            <option value="5">周五</option>
+            <option value="6">周六</option>
+            <option value="0">周日</option>
+          </select>
+          <input id="report-weekly-time" type="time" value="18:00" />
+          <button id="report-save-schedule" class="small">保存定时设置</button>
+        </div>
         <div class="report-toolbar">
           <select id="report-type">
             <option value="daily">日报</option>
             <option value="weekly">周报</option>
-            <option value="quarterly">季报</option>
-            <option value="semi_annual">半年报</option>
+            <option value="range">指定日期范围</option>
             <option value="project_summary">项目总结</option>
           </select>
-          <input id="report-date" type="date" />
-          <button id="report-generate" class="primary small">生成报告</button>
+          <input id="report-date-from" type="date" />
+          <input id="report-date-to" type="date" />
+          <button id="report-generate" class="primary small">生成并保存</button>
           <span id="report-status" class="report-status"></span>
         </div>
         <div id="reports-body" class="scroll-body report-body"></div>

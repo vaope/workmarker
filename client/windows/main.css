@@ -274,3 +274,24 @@ button { font-family: inherit; cursor: pointer; }
   background: var(--bg-2); border-radius: 8px; padding: 16px;
   max-width: 100%; overflow-x: auto;
 }
+.report-schedule-card {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+}
+.report-schedule-card label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 13px; color: var(--text);
+}
+.report-schedule-card input[type="time"],
+.report-schedule-card select {
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 8px; font-size: 13px;
+}
+.report-path {
+  margin: 0 0 12px; color: var(--text-faint);
+  font-size: 12px; word-break: break-all;
+}
+.report-toolbar input[type="date"] {
+  width: 130px;
+}
