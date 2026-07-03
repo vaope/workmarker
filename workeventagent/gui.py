@@ -382,6 +382,18 @@ def handle_timeline(request: dict) -> dict:
 import os
 
 
+def _safe_component(raw: str | None) -> str:
+    """Sanitize a user-controlled path component so it cannot escape its parent directory.
+
+    Keeps [A-Za-z0-9_-]; replaces everything else with '_'.  If the result is
+    empty (including when *raw* is None / empty), returns ``"x"``.
+    """
+    if not raw:
+        return "x"
+    cleaned = re.sub(r"[^A-Za-z0-9_-]", "_", raw)
+    return cleaned or "x"
+
+
 def _report_output_path(
     workspace: Path,
     report_type: str,
@@ -397,9 +409,9 @@ def _report_output_path(
     if report_type == "weekly":
         return reports_dir / "weekly" / f"{date_from}_to_{date_to}.md"
     if report_type == "project_summary":
-        safe_project = project_id or "project"
+        safe_project = _safe_component(project_id)
         return reports_dir / "project" / f"{safe_project}-summary-{date_to}.md"
-    safe_label = range_label or "custom"
+    safe_label = _safe_component(range_label)
     return reports_dir / "range" / f"{date_from}_to_{date_to}-{safe_label}.md"
 
 
@@ -496,7 +508,7 @@ def _ensure_str(val: object) -> str:
 
 
 def _build_project_report(
-    project: dict, events: list[dict], report_type: str, anchor_date: datetime,
+    project: dict, events: list[dict], report_type: str,
 ) -> str:
     """Build markdown report block for a single project."""
     project_id = project.get("project_id", "")
@@ -641,8 +653,7 @@ def handle_generate_report(request: dict) -> dict:
         total_events += len(filtered)
         if project.get("project_id"):
             included_project_ids.append(project["project_id"])
-        anchor = datetime.strptime(date_to_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        block = _build_project_report(project, filtered, report_type, anchor)
+        block = _build_project_report(project, filtered, report_type)
         report_lines.append(block)
         report_lines.append("")
 

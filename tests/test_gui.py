@@ -12,6 +12,8 @@ from workeventagent.gui import (
     _parse_work_map_tasks,
     _parse_attachments_task_ids,
     _generate_init_markdown,
+    _report_output_path,
+    _safe_component,
     handle_create_item,
     handle_create_task,
     handle_delete_item,
@@ -1540,6 +1542,60 @@ class ReportTest(unittest.TestCase):
 
             self.assertFalse(result["ok"])
             self.assertEqual(result["kind"], "invalid_input")
+
+
+class ReportPathSafetyTests(unittest.TestCase):
+    """Path-traversal regression tests for _report_output_path / _safe_component."""
+
+    def test_safe_component_keeps_valid_chars(self):
+        self.assertEqual(_safe_component("my-project_01"), "my-project_01")
+        self.assertEqual(_safe_component("quarterly"), "quarterly")
+        self.assertEqual(_safe_component("semi_annual"), "semi_annual")
+        self.assertEqual(_safe_component("custom"), "custom")
+
+    def test_safe_component_replaces_traversal_chars(self):
+        self.assertEqual(_safe_component("../../../etc"), "_________etc")
+        self.assertEqual(_safe_component("a\\b/c"), "a_b_c")
+        self.assertEqual(_safe_component("foo.bar"), "foo_bar")
+        self.assertEqual(_safe_component("..%00"), "___00")
+
+    def test_safe_component_none_or_empty_yields_x(self):
+        self.assertEqual(_safe_component(None), "x")
+        self.assertEqual(_safe_component(""), "x")
+        self.assertEqual(_safe_component("   "), "___")  # spaces → _, then non-empty so stays
+
+    def test_project_summary_path_stays_in_workspace(self):
+        from pathlib import Path
+        ws = Path("C:/work/my-workspace")
+        p = _report_output_path(ws, "project_summary", "2026-01-01", "2026-01-01",
+                                project_id="../../../Windows/Temp/pwned",
+                                range_label="")
+        # Must stay under workspace/reports/project/
+        self.assertTrue(p.as_posix().startswith("C:/work/my-workspace/reports/project/"))
+        self.assertNotIn("..", p.as_posix())
+
+    def test_range_path_stays_in_workspace(self):
+        from pathlib import Path
+        ws = Path("C:/work/my-workspace")
+        p = _report_output_path(ws, "range", "2026-01-01", "2026-01-01",
+                                project_id=None,
+                                range_label="../../../..")
+        self.assertIn("C:/work/my-workspace/reports/range/", p.as_posix())
+        self.assertNotIn("..", p.as_posix())
+
+    def test_range_label_quarterly_stays_intact(self):
+        from pathlib import Path
+        ws = Path("C:/work/my-workspace")
+        p = _report_output_path(ws, "range", "2026-01-01", "2026-01-01",
+                                project_id=None, range_label="quarterly")
+        self.assertIn("_to_2026-01-01-quarterly", p.name)
+
+    def test_normal_project_id_unchanged(self):
+        from pathlib import Path
+        ws = Path("C:/work/my-workspace")
+        p = _report_output_path(ws, "project_summary", "2026-01-01", "2026-01-01",
+                                project_id="my-project", range_label="")
+        self.assertIn("my-project", p.name)
 
 
 if __name__ == "__main__":
