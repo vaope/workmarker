@@ -29,6 +29,7 @@ from workeventagent.opencode_runner import (
     parse_project_route_output,
     run_archivist,
     run_project_router,
+    run_reporter,
 )
 from workeventagent.registry import scan_workspace
 
@@ -458,6 +459,42 @@ def _report_title(report_type: str, date_from_str: str, date_to_str: str, projec
     return title_map.get(report_type, f"报告 · {date_from_str} → {date_to_str}")
 
 
+def _reporter_context(
+    report_type: str, date_from: str, date_to: str, report_body: str,
+) -> str:
+    """Build a deterministic context document for the reporter agent."""
+    return "\n".join([
+        f"report_type: {report_type}",
+        f"date_from: {date_from}",
+        f"date_to: {date_to}",
+        "",
+        report_body,
+    ])
+
+
+def _parse_reporter_json(raw: str) -> dict:
+    """Extract reporter JSON from opencode NDJSON output.
+    
+    Follows the same NDJSON→fence extraction convention as the archivist.
+    """
+    from workeventagent.opencode_runner import _extract_json_text
+    inner = _extract_json_text(raw)
+    try:
+        data = _json.loads(inner)
+    except _json.JSONDecodeError:
+        return {"highlight": "", "narrative": "", "risks": [], "next_actions": []}
+    return {
+        "highlight": str(data.get("highlight", "")),
+        "narrative": str(data.get("narrative", "")),
+        "risks": [_ensure_str(r) for r in data.get("risks", [])],
+        "next_actions": [_ensure_str(a) for a in data.get("next_actions", [])],
+    }
+
+
+def _ensure_str(val: object) -> str:
+    return str(val) if val is not None else ""
+
+
 def _build_project_report(
     project: dict, events: list[dict], report_type: str, anchor_date: datetime,
 ) -> str:
@@ -629,7 +666,9 @@ def handle_generate_report(request: dict) -> dict:
             "skip_reason": "no_events",
         }
 
-    # ── frontmatter ──
+    # ── frontmatter + deterministic body ──
+    deterministic_body = "\n".join(report_lines) if report_lines else ""
+
     frontmatter = [
         "---",
         "doc_kind: work_report",
@@ -644,7 +683,67 @@ def handle_generate_report(request: dict) -> dict:
         "---",
         "",
     ]
-    report = "\n".join(frontmatter + report_lines)
+
+    # ── AI synthesis ──
+    include_ai = request.get("include_ai", False)
+    ai_block = ""
+
+    if report_type == "project_summary":
+        if not include_ai:
+            return {"ok": False, "kind": "invalid_input",
+                    "error": "project_summary requires include_ai=true"}
+        # project_summary: AI narrative is required (fail-closed)
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", suffix=".md", delete=False,
+            ) as fh:
+                context_path = Path(fh.name)
+                fh.write(_reporter_context(
+                    report_type, date_from_str, date_to_str, deterministic_body,
+                ))
+            try:
+                raw = run_reporter(
+                    "Summarize this report context as JSON.",
+                    context_path,
+                    opencode_bin=request.get("opencode_bin", "opencode"),
+                )
+            finally:
+                context_path.unlink(missing_ok=True)
+            ai_data = _parse_reporter_json(raw)
+            narrative = ai_data.get("narrative", "")
+            if not narrative:
+                return {"ok": False, "kind": "opencode_error",
+                        "error": "reporter returned empty narrative for project_summary"}
+            ai_block = f"\n## AI Narrative\n\n{narrative}\n"
+        except OpencodeRunnerError as exc:
+            return {"ok": False, "kind": "opencode_error", "error": str(exc)}
+    elif include_ai and report_type in {"daily", "weekly"}:
+        # daily/weekly: AI highlight is optional (fail-open)
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", suffix=".md", delete=False,
+            ) as fh:
+                context_path = Path(fh.name)
+                fh.write(_reporter_context(
+                    report_type, date_from_str, date_to_str, deterministic_body,
+                ))
+            try:
+                raw = run_reporter(
+                    "Write a short highlight for this report context as JSON.",
+                    context_path,
+                    opencode_bin=request.get("opencode_bin", "opencode"),
+                )
+            finally:
+                context_path.unlink(missing_ok=True)
+            ai_data = _parse_reporter_json(raw)
+            highlight = ai_data.get("highlight", "")
+            if highlight:
+                ai_block = f"\n## AI Highlight\n\n{highlight}\n"
+        except OpencodeRunnerError:
+            ai_block = "\n## AI Highlight\n\n*AI highlight unavailable.*\n"
+
+    report = "\n".join(frontmatter + [deterministic_body, ai_block])
+    report = report.strip() + "\n"
 
     # ── persist ──
     written_path = ""

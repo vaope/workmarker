@@ -35,6 +35,17 @@ def run_project_router(
     )
 
 
+def run_reporter(
+    prompt: str, report_doc: Path, opencode_bin: str = "opencode"
+) -> str:
+    return _run_opencode_agent(
+        prompt=prompt,
+        input_doc=report_doc,
+        agent_name="workevent-reporter",
+        opencode_bin=opencode_bin,
+    )
+
+
 def _run_opencode_agent(
     prompt: str, input_doc: Path, agent_name: str, opencode_bin: str = "opencode"
 ) -> str:

@@ -29,6 +29,7 @@ from workeventagent.gui import (
 )
 from workeventagent.markdown_store import write_project_atomically
 from workeventagent.index_store import get_task, init_db, rebuild_index
+from workeventagent.opencode_runner import OpencodeRunnerError
 
 FIXTURE = Path("tests/fixtures/multimodal-labeling.md")
 
@@ -1492,6 +1493,53 @@ class ReportTest(unittest.TestCase):
             self.assertTrue(result.get("skipped"))
             self.assertEqual(result.get("skip_reason"), "no_events")
             self.assertFalse((workspace / "reports").exists())
+
+    def test_project_summary_requires_reporter_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            _write_project_with_timeline(
+                workspace,
+                "report-project.md",
+                [("2026-07-03T10:00:00+00:00", "event-one", "task-a", "Summarize me")],
+            )
+
+            with patch("workeventagent.gui.run_reporter",
+                       side_effect=OpencodeRunnerError("reporter failed")):
+                result = handle_generate_report({
+                    "workspace": str(workspace),
+                    "type": "project_summary",
+                    "project_id": "report-project",
+                    "date_from": "2026-07-03",
+                    "date_to": "2026-07-03",
+                    "persist": True,
+                    "include_ai": True,
+                })
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["kind"], "opencode_error")
+            self.assertFalse((workspace / "reports" / "project").exists())
+
+    def test_project_summary_rejects_include_ai_false(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            _write_project_with_timeline(
+                workspace,
+                "report-project.md",
+                [("2026-07-03T10:00:00+00:00", "event-one", "task-a", "Summary")],
+            )
+
+            result = handle_generate_report({
+                "workspace": str(workspace),
+                "type": "project_summary",
+                "project_id": "report-project",
+                "date_from": "2026-07-03",
+                "date_to": "2026-07-03",
+                "persist": True,
+                "include_ai": False,
+            })
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["kind"], "invalid_input")
 
 
 if __name__ == "__main__":

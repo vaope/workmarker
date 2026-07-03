@@ -10,6 +10,7 @@ from workeventagent.opencode_runner import (
     parse_project_route_output,
     run_archivist,
     run_project_router,
+    run_reporter,
 )
 
 
@@ -226,6 +227,23 @@ class OpencodeRunnerTest(unittest.TestCase):
 """
         with self.assertRaises(OpencodeRunnerError):
             parse_archivist_output(raw, "event-1")
+
+    @patch("workeventagent.opencode_runner.subprocess.run")
+    def test_run_reporter_calls_opencode_reporter_agent_with_file(self, run):
+        run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout='{"type":"text","part":{"text":"{}"}}\n',
+            stderr="",
+        )
+
+        output = run_reporter("summarize", Path("report-context.md"), opencode_bin="opencode")
+
+        self.assertTrue(output)
+        cmd = run.call_args.args[0]
+        self.assertIn("--agent", cmd)
+        self.assertIn("workevent-reporter", cmd)
+        self.assertIn("--file", cmd)
+        self.assertIn("report-context.md", cmd)
 
 
 if __name__ == "__main__":
