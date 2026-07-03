@@ -227,6 +227,7 @@ preload 暴露（`window.wea`）：
 | `initProject(spec)` | gui init |
 | `createItem(projectPath, title)` | gui create_item |
 | `createTask(projectPath, itemId, title)` | gui create_task |
+| `generateReport(request)` | gui generate_report（报告生成见 `docs/designs/F002-report-generation.md`） |
 | `readClipboardImage()` | 主进程 clipboard.readImage → 写 temp → 返回 {tempPath, filename} 或 null |
 | `getConfig()` / `setWorkspace(path)` | config 读写 |
 | `updateConfig(patch)` | config 读写；hotkey 变化时主进程即时重新注册全局快捷键 |
