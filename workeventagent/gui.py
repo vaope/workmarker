@@ -378,43 +378,55 @@ def handle_timeline(request: dict) -> dict:
 
 # ── generate_report ───────────────────────────────────────
 
-_REPORT_DATE_RANGES: dict[str, int] = {
-    "daily": 1,
-    "weekly": 7,
-    "quarterly": 90,
-    "semi_annual": 180,
-}
+import os
 
 
-def _report_title(report_type: str, anchor_date: datetime, project_title: str = "") -> str:
-    date_str = anchor_date.strftime("%Y-%m-%d")
-    type_names: dict[str, str] = {
-        "daily": f"日报 · {date_str}",
-        "weekly": f"周报 · {date_str}",
-        "quarterly": f"季报 · {date_str}",
-        "semi_annual": f"半年报 · {date_str}",
-        "project_summary": f"项目总结 · {project_title or date_str}",
-    }
-    return type_names.get(report_type, f"报告 · {date_str}")
+def _parse_local_date_range(date_from_str: str, date_to_str: str) -> tuple[datetime, datetime]:
+    """Parse inclusive local-date range from YYYY-MM-DD strings.
+    
+    Returns naive datetime boundaries in local time (start of date_from,
+    end of date_to).  These are compared against event timestamps that
+    have been converted to local time via .astimezone().
+    """
+    start_day = datetime.strptime(date_from_str, "%Y-%m-%d").date()
+    end_day = datetime.strptime(date_to_str, "%Y-%m-%d").date()
+    if end_day < start_day:
+        raise ValueError("date_to must be on or after date_from")
+    start = datetime.combine(start_day, datetime.min.time()).astimezone()
+    end = datetime.combine(end_day, datetime.max.time()).astimezone()
+    return start, end
 
 
-def _filter_events_by_range(
+def _filter_events_by_local_range(
     events: list[dict], date_from: datetime, date_to: datetime
 ) -> list[dict]:
-    """Filter timeline events whose timestamp falls within [date_from, date_to]."""
+    """Filter timeline events whose local timestamp falls within [date_from, date_to].
+    
+    Each event's UTC timestamp is converted to local time via .astimezone()
+    (per-event DST-correct offset), then compared against the local boundaries.
+    """
     result: list[dict] = []
     for ev in events:
         ts = ev.get("timestamp", "")
         if not ts:
             continue
         try:
-            # timestamp format: 2026-07-01T15:30:00.123+08:00
-            ev_dt = datetime.fromisoformat(ts)
+            ev_dt = datetime.fromisoformat(ts).astimezone()
         except ValueError:
             continue
         if date_from <= ev_dt <= date_to:
             result.append(ev)
     return result
+
+
+def _report_title(report_type: str, date_from_str: str, date_to_str: str, project_title: str = "") -> str:
+    title_map: dict[str, str] = {
+        "daily": f"日报 · {date_from_str}",
+        "weekly": f"周报 · {date_from_str} → {date_to_str}",
+        "range": f"报告 · {date_from_str} → {date_to_str}",
+        "project_summary": f"项目总结 · {project_title or date_from_str}",
+    }
+    return title_map.get(report_type, f"报告 · {date_from_str} → {date_to_str}")
 
 
 def _build_project_report(
@@ -485,57 +497,61 @@ def _build_project_report(
 
 
 def handle_generate_report(request: dict) -> dict:
-    """Generate daily/weekly/quarterly/semi-annual/project-summary report.
+    """Generate daily/weekly/range/project_summary report.
 
     request: {
         "workspace": str,
-        "type": "daily"|"weekly"|"quarterly"|"semi_annual"|"project_summary",
-        "project_id": str | None,   # None = all projects
-        "date": str | None,         # ISO date YYYY-MM-DD, defaults to today
+        "type": "daily"|"weekly"|"range"|"project_summary",
+        "project_id": str | None,
+        "date_from": str | None,    # YYYY-MM-DD, defaults to today (local)
+        "date_to": str | None,      # YYYY-MM-DD, defaults to date_from
+        "persist": bool,            # write reports/*.md file
+        "mode": "manual"|"scheduled",
+        "include_ai": bool,         # AI highlight/narrative (Task 3)
+        "range_label": str | None,  # e.g. "quarterly" / "semi_annual" for file naming
     }
     """
     workspace = Path(request["workspace"])
-    report_type = request.get("type", "daily")
     project_id = request.get("project_id")
-    date_str = request.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    if report_type not in ("daily", "weekly", "quarterly", "semi_annual", "project_summary"):
-        return {"ok": False, "kind": "invalid_input",
-                "error": f"unsupported report type: {report_type}"}
-
-    # Parse anchor date
-    try:
-        anchor_date = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        # End of anchor day (inclusive)
-        date_to = anchor_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-    except ValueError:
-        return {"ok": False, "kind": "invalid_input",
-                "error": f"invalid date format: {date_str}, expected YYYY-MM-DD"}
-
-    # Determine date range
-    if report_type == "project_summary":
-        date_from = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    # ── type normalization ──
+    raw_type = request.get("type", "daily")
+    # Legacy types → range (backend no longer hard-codes calendar math)
+    if raw_type in {"quarterly", "semi_annual"}:
+        report_type = "range"
+        range_label = raw_type
     else:
-        days = _REPORT_DATE_RANGES[report_type]
-        date_from = (anchor_date - timedelta(days=days - 1)).replace(
-            hour=0, minute=0, second=0, microsecond=0)
+        report_type = raw_type
+        range_label = str(request.get("range_label", "custom"))
 
-    # Scan workspace
+    if report_type not in ("daily", "weekly", "range", "project_summary"):
+        return {"ok": False, "kind": "invalid_input",
+                "error": f"unsupported report type: {raw_type}"}
+
+    # ── date range (local computer time) ──
+    default_date = datetime.now().astimezone().strftime("%Y-%m-%d")
+    date_from_str = request.get("date_from") or request.get("date") or default_date
+    date_to_str = request.get("date_to") or date_from_str
+    try:
+        date_from, date_to = _parse_local_date_range(date_from_str, date_to_str)
+    except ValueError as exc:
+        return {"ok": False, "kind": "invalid_input", "error": str(exc)}
+
+    # ── scan workspace ──
     projects = scan_workspace(workspace)
 
-    # Filter projects
     if project_id:
         projects = [p for p in projects if p.get("project_id") == project_id]
     if report_type == "project_summary" and not project_id:
         return {"ok": False, "kind": "invalid_input",
                 "error": "project_id is required for project_summary"}
 
-    # Build report
+    # ── build report ──
     report_lines: list[str] = []
-    title = _report_title(report_type, anchor_date)
+    title = _report_title(report_type, date_from_str, date_to_str)
     report_lines.append(f"# {title}")
     report_lines.append("")
-    report_lines.append(f"周期：{date_from.strftime('%Y-%m-%d')} → {date_to.strftime('%Y-%m-%d')}")
+    report_lines.append(f"周期：{date_from_str} → {date_to_str}")
     report_lines.append("")
 
     total_events = 0
@@ -545,18 +561,19 @@ def handle_generate_report(request: dict) -> dict:
         try:
             events_data = handle_timeline({"project_path": project["path"]})
         except Exception:
-            continue  # Skip unreadable projects
+            continue
         if not events_data.get("ok"):
             continue
 
         all_events = events_data.get("events", [])
-        filtered = _filter_events_by_range(all_events, date_from, date_to)
+        filtered = _filter_events_by_local_range(all_events, date_from, date_to)
         if not filtered and report_type != "project_summary":
-            continue  # Skip projects with no events in range
+            continue
 
         project_count += 1
         total_events += len(filtered)
-        block = _build_project_report(project, filtered, report_type, anchor_date)
+        anchor = datetime.strptime(date_to_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        block = _build_project_report(project, filtered, report_type, anchor)
         report_lines.append(block)
         report_lines.append("")
 
@@ -569,7 +586,7 @@ def handle_generate_report(request: dict) -> dict:
     return {
         "ok": True,
         "report": report,
-        "date_range": {"from": date_from.strftime("%Y-%m-%d"), "to": date_to.strftime("%Y-%m-%d")},
+        "date_range": {"from": date_from_str, "to": date_to_str},
         "project_count": project_count,
         "event_count": total_events,
     }

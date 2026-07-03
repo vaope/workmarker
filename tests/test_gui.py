@@ -1289,6 +1289,49 @@ class UpdateTaskTest(unittest.TestCase):
 
 # ── generate_report ────────────────────────────────────────
 
+def _write_project_with_timeline(
+    workspace: Path, filename: str, events: list[tuple[str, str, str, str]],
+) -> Path:
+    """Write a minimal work_project markdown with Timeline events."""
+    lines = [
+        "---",
+        "project_id: report-project",
+        "title: Report Project",
+        "doc_kind: work_project",
+        "created: 2026-07-01",
+        "updated: 2026-07-01",
+        "---",
+        "",
+        "## Current Snapshot",
+        "",
+        "## Work Map",
+        "### Item: Report Item <!-- item:item-a -->",
+        "#### Task: Report Task <!-- task:task-a -->",
+        "- status: in_progress",
+        "- next_action:",
+        "- last_event_id:",
+        "",
+        "## Decisions",
+        "",
+        "## Attachments",
+        "",
+        "## Timeline",
+    ]
+    for timestamp, event_id, task_id, summary in events:
+        lines.extend([
+            f"- {timestamp} <!-- event:{event_id} -->",
+            f"  - task_id: {task_id}",
+            f"  - input: {summary}",
+            f"  - summary: {summary}",
+            "  - status: in_progress",
+            "  - next_action:",
+        ])
+    lines.extend(["", "## Daily / Weekly Rollups", ""])
+    path = workspace / filename
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
 class ReportTest(unittest.TestCase):
     def _setup(self):
         tmp = tempfile.TemporaryDirectory()
@@ -1376,6 +1419,32 @@ class ReportTest(unittest.TestCase):
             self.assertFalse(result["ok"])
         finally:
             tmp.cleanup()
+
+    def test_generate_report_filters_by_explicit_local_date_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            _write_project_with_timeline(
+                workspace,
+                "local-boundary.md",
+                [
+                    ("2026-07-02T15:30:00+00:00", "event-evening", "task-a", "Evening local event"),
+                    ("2026-07-03T16:30:00+00:00", "event-next-day", "task-a", "Next local day event"),
+                ],
+            )
+
+            result = handle_generate_report({
+                "workspace": str(workspace),
+                "type": "daily",
+                "date_from": "2026-07-02",
+                "date_to": "2026-07-02",
+                "persist": False,
+                "include_ai": False,
+            })
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["event_count"], 1)
+            self.assertIn("Evening local event", result["report"])
+            self.assertNotIn("Next local day event", result["report"])
 
 
 if __name__ == "__main__":
