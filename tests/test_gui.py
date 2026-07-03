@@ -1446,6 +1446,53 @@ class ReportTest(unittest.TestCase):
             self.assertIn("Evening local event", result["report"])
             self.assertNotIn("Next local day event", result["report"])
 
+    def test_generate_report_persists_markdown_with_frontmatter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            _write_project_with_timeline(
+                workspace,
+                "report-project.md",
+                [("2026-07-03T10:00:00+00:00", "event-one", "task-a", "Persist me")],
+            )
+
+            result = handle_generate_report({
+                "workspace": str(workspace),
+                "type": "daily",
+                "date_from": "2026-07-03",
+                "date_to": "2026-07-03",
+                "persist": True,
+                "include_ai": False,
+            })
+
+            self.assertTrue(result["ok"])
+            self.assertFalse(result.get("skipped"))
+            report_path = Path(result["written_path"])
+            self.assertTrue(report_path.exists())
+            text = report_path.read_text(encoding="utf-8")
+            self.assertIn("doc_kind: work_report", text)
+            self.assertIn("report_type: daily", text)
+            self.assertIn("Persist me", text)
+
+    def test_scheduled_daily_skips_when_no_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            _write_project_with_timeline(workspace, "empty-day.md", [])
+
+            result = handle_generate_report({
+                "workspace": str(workspace),
+                "type": "daily",
+                "date_from": "2026-07-03",
+                "date_to": "2026-07-03",
+                "persist": True,
+                "mode": "scheduled",
+                "include_ai": False,
+            })
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(result.get("skipped"))
+            self.assertEqual(result.get("skip_reason"), "no_events")
+            self.assertFalse((workspace / "reports").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

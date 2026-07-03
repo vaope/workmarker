@@ -381,6 +381,35 @@ def handle_timeline(request: dict) -> dict:
 import os
 
 
+def _report_output_path(
+    workspace: Path,
+    report_type: str,
+    date_from: str,
+    date_to: str,
+    project_id: str | None,
+    range_label: str,
+) -> Path:
+    """Compute output path for a generated report file under workspace/reports/."""
+    reports_dir = workspace / "reports"
+    if report_type == "daily":
+        return reports_dir / "daily" / f"{date_from}.md"
+    if report_type == "weekly":
+        return reports_dir / "weekly" / f"{date_from}_to_{date_to}.md"
+    if report_type == "project_summary":
+        safe_project = project_id or "project"
+        return reports_dir / "project" / f"{safe_project}-summary-{date_to}.md"
+    safe_label = range_label or "custom"
+    return reports_dir / "range" / f"{date_from}_to_{date_to}-{safe_label}.md"
+
+
+def _write_report_atomically(path: Path, content: str) -> None:
+    """Write report content atomically via temp file + os.replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def _parse_local_date_range(date_from_str: str, date_to_str: str) -> tuple[datetime, datetime]:
     """Parse inclusive local-date range from YYYY-MM-DD strings.
     
@@ -556,6 +585,7 @@ def handle_generate_report(request: dict) -> dict:
 
     total_events = 0
     project_count = 0
+    included_project_ids: list[str] = []
 
     for project in projects:
         try:
@@ -572,6 +602,8 @@ def handle_generate_report(request: dict) -> dict:
 
         project_count += 1
         total_events += len(filtered)
+        if project.get("project_id"):
+            included_project_ids.append(project["project_id"])
         anchor = datetime.strptime(date_to_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         block = _build_project_report(project, filtered, report_type, anchor)
         report_lines.append(block)
@@ -581,14 +613,56 @@ def handle_generate_report(request: dict) -> dict:
         report_lines.append("*所选周期内无活动记录*")
         report_lines.append("")
 
-    report = "\n".join(report_lines)
+    mode = request.get("mode", "manual")
+    persist = request.get("persist", False)
+
+    # ── scheduled no-event skip ──
+    if mode == "scheduled" and report_type in {"daily", "weekly"} and total_events == 0:
+        return {
+            "ok": True,
+            "report": "",
+            "written_path": "",
+            "date_range": {"from": date_from_str, "to": date_to_str},
+            "project_count": 0,
+            "event_count": 0,
+            "skipped": True,
+            "skip_reason": "no_events",
+        }
+
+    # ── frontmatter ──
+    frontmatter = [
+        "---",
+        "doc_kind: work_report",
+        f"report_type: {report_type}",
+        f"date_from: {date_from_str}",
+        f"date_to: {date_to_str}",
+        f"generated_at: {datetime.now().astimezone().isoformat(timespec='seconds')}",
+        "timezone: local",
+        f"source_project_ids: [{', '.join(included_project_ids)}]",
+        f"event_count: {total_events}",
+        "generator_version: F002",
+        "---",
+        "",
+    ]
+    report = "\n".join(frontmatter + report_lines)
+
+    # ── persist ──
+    written_path = ""
+    if persist:
+        path = _report_output_path(workspace, report_type, date_from_str, date_to_str,
+                                    project_id, range_label)
+        _write_report_atomically(path, report)
+        written_path = str(path)
 
     return {
         "ok": True,
         "report": report,
+        "written_path": written_path,
         "date_range": {"from": date_from_str, "to": date_to_str},
         "project_count": project_count,
         "event_count": total_events,
+        "skipped": False,
+        "skip_reason": "",
     }
 
 
