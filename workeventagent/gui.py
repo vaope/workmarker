@@ -29,7 +29,12 @@ from workeventagent.inbox_store import (
     update_capture,
 )
 from workeventagent.search_store import search_workspace
-from workeventagent.correction_store import correct_event_same_project
+from workeventagent.correction_store import (
+    correct_event_cross_project,
+    correct_event_same_project,
+    list_pending_corrections,
+    resume_correction,
+)
 from workeventagent.markdown_store import ProjectDocument, write_project_atomically
 from workeventagent.models import ArchiveProposal, TargetRef, TimelineEvent
 from workeventagent.opencode_runner import (
@@ -91,6 +96,8 @@ def _main_impl() -> None:
         "inbox_cancel": handle_inbox_cancel,
         "search": handle_search,
         "correct_event": handle_correct_event,
+        "correction_recoveries": handle_correction_recoveries,
+        "resume_correction": handle_resume_correction,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -930,7 +937,22 @@ def handle_search(request: dict) -> dict:
 def handle_correct_event(request: dict) -> dict:
     project_path = Path(request["project_path"])
     db_path = Path(request["db_path"])
+    if request.get("target_project_path"):
+        target_path = Path(request["target_project_path"])
+        return correct_event_cross_project(project_path, target_path, db_path, request)
     return correct_event_same_project(project_path, db_path, request)
+
+
+def handle_correction_recoveries(request: dict) -> dict:
+    workspace = Path(request["workspace"])
+    return {"ok": True, "pending": list_pending_corrections(workspace)}
+
+
+def handle_resume_correction(request: dict) -> dict:
+    workspace = Path(request["workspace"])
+    correction_id = request["correction_id"]
+    db_path = Path(request["db_path"])
+    return resume_correction(workspace, correction_id, db_path)
 
 
 # ── init ─────────────────────────────────────────────────
