@@ -519,6 +519,7 @@ async function submitUpdate() {
 
 // ---- in-app delete confirm (replaces native confirm() — avoids OS focus loss in Electron) ----
 let _deleteCallback = null;
+let _deleteEscHandler = null;
 
 function showDeleteConfirm(message, onConfirm) {
   _deleteCallback = onConfirm;
@@ -534,20 +535,17 @@ function showDeleteConfirm(message, onConfirm) {
 
   $('#dc-cancel').addEventListener('click', cancelDeleteConfirm);
   $('#dc-confirm').addEventListener('click', commitDeleteConfirm);
-  // ESC to cancel
-  const onKey = (e) => { if (e.key === 'Escape') { document.removeEventListener('keydown', onKey); cancelDeleteConfirm(); } };
-  document.addEventListener('keydown', onKey);
+  _deleteEscHandler = (e) => { if (e.key === 'Escape') cancelDeleteConfirm(); };
+  document.addEventListener('keydown', _deleteEscHandler);
 }
 
 function cancelDeleteConfirm() {
   hideConfirmCard();
-  _deleteCallback = null;
 }
 
 function commitDeleteConfirm() {
   const cb = _deleteCallback;
   hideConfirmCard();
-  _deleteCallback = null;
   if (cb) cb();
 }
 
@@ -605,7 +603,12 @@ function taskLabel(taskId) {
   return o ? o.label : '';
 }
 
-function hideConfirmCard() { $('#confirm-card').classList.add('hidden'); state.proposal = null; _deleteCallback = null; }
+function hideConfirmCard() {
+  $('#confirm-card').classList.add('hidden');
+  state.proposal = null;
+  _deleteCallback = null;
+  if (_deleteEscHandler) { document.removeEventListener('keydown', _deleteEscHandler); _deleteEscHandler = null; }
+}
 
 async function commitProposal() {
   if (!state.proposal) return;
