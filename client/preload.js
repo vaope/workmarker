@@ -35,6 +35,9 @@ contextBridge.exposeInMainWorld('wea', {
   // --- search ---
   search: (query, limit) => ipcRenderer.invoke('wea:search', { query, limit: limit || 50 }),
 
+  // --- correction ---
+  correctEvent: (request) => ipcRenderer.invoke('wea:correctEvent', request || {}),
+
   // --- clipboard / attachments ---
   readClipboardImage: () => ipcRenderer.invoke('wea:readClipboardImage'),
   discardPending: (tempPaths) => ipcRenderer.invoke('wea:discardPending', { tempPaths: tempPaths || [] }),

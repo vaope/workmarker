@@ -204,6 +204,47 @@
     </div>
   </div>
 
+  <div id="correction-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>纠正归档</h2>
+      <div class="correction-src">
+        <p class="correction-label">原始事件：<span id="corr-original-summary"></span></p>
+        <p class="correction-label">来源项目：<span id="corr-source-project"></span> / <span id="corr-source-task"></span></p>
+      </div>
+      <label class="field">目标项目
+        <select id="corr-target-project"></select>
+      </label>
+      <label class="field">目标事项
+        <select id="corr-target-item"></select>
+      </label>
+      <label class="field">目标任务
+        <select id="corr-target-task"></select>
+      </label>
+      <label class="field">摘要
+        <input id="corr-summary" type="text" />
+      </label>
+      <label class="field">状态
+        <select id="corr-status">
+          <option value="in_progress">进行中</option>
+          <option value="done">已完成</option>
+          <option value="blocked">阻塞</option>
+        </select>
+      </label>
+      <label class="field">下一步
+        <input id="corr-next-action" type="text" />
+      </label>
+      <label class="field">纠正原因
+        <input id="corr-reason" type="text" placeholder="归档错误需要纠正" />
+      </label>
+      <div id="corr-preview" class="correction-diff hidden"></div>
+      <div class="modal-actions">
+        <button id="corr-cancel" class="ghost">取消</button>
+        <button id="corr-submit" class="primary">提交纠正</button>
+      </div>
+      <div id="corr-error" class="modal-error hidden"></div>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
 
   <script src="main.js"></script>

@@ -315,6 +315,11 @@ function attachIpc() {
     return callBackend('search', { workspace: c.workspace, query, limit: limit || 50 }, c.pythonCmd);
   });
 
+  ipcMain.handle('wea:correctEvent', async (_e, request) => {
+    const c = cfg();
+    return callBackend('correct_event', { ...request, db_path: dbPathFor(c.workspace) }, c.pythonCmd);
+  });
+
   ipcMain.handle('wea:readClipboardImage', async () => {
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;

@@ -108,6 +108,11 @@ function bindStaticHandlers() {
     else toast('剪贴板没有图片，复制图片后再点（或直接 Ctrl+V）', 'err');
   });
 
+  // correction modal
+  $('#corr-cancel').addEventListener('click', closeCorrectionModal);
+  $('#corr-submit').addEventListener('click', submitCorrection);
+  $('#corr-target-project').addEventListener('change', onCorrectionTargetProjectChange);
+
   // report
   $('#report-generate').addEventListener('click', generateReport);
   $('#report-save-schedule').addEventListener('click', saveReportSchedule);
@@ -392,8 +397,23 @@ function renderTimeline() {
          <div class="tl-path">${esc(e.task_title || e.task_id)}</div>
          <div class="tl-summary">${esc(e.summary)}</div>
          ${e.has_attachment ? '<div class="tl-clip">📎 含附件</div>' : ''}
-       </div>`;
+       </div>
+       <button class="ghost tl-correct" data-event-id="${esc(e.event_id)}" data-task-id="${esc(e.task_id)}" data-item-id="${esc(e.item_id)}" data-summary="${esc(e.summary)}" data-status="${esc(e.status)}" data-next-action="${esc(e.next_action || '')}">纠正</button>`;
     body.appendChild(row);
+  });
+  // bind correction buttons after rendering
+  body.querySelectorAll('.tl-correct').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const event = {
+        event_id: btn.dataset.eventId,
+        task_id: btn.dataset.taskId,
+        item_id: btn.dataset.itemId,
+        summary: btn.dataset.summary,
+        status: btn.dataset.status,
+        next_action: btn.dataset.nextAction,
+      };
+      openCorrectionModal(event);
+    });
   });
 }
 
@@ -1087,6 +1107,174 @@ async function loadReportSchedule() {
     $('#report-weekly-enabled').checked = s.weeklyEnabled || false;
     $('#report-weekly-day').value = String(s.weeklyDay != null ? s.weeklyDay : 5);
     $('#report-weekly-time').value = s.weeklyTime || '18:00';
+  }
+}
+
+// ---- correction modal ---------------------------------------------------
+
+let _correctionEvent = null;
+
+function openCorrectionModal(event) {
+  _correctionEvent = event;
+  // Populate read-only source info
+  const projTitle = (state.currentProject && state.currentProject.title) || (state.currentProject && state.currentProject.project_id) || '';
+  $('#corr-original-summary').textContent = event.summary || '';
+  $('#corr-source-project').textContent = projTitle;
+  $('#corr-source-task').textContent = event.task_title || event.task_id || '';
+
+  // Populate editable fields
+  $('#corr-summary').value = event.summary || '';
+  $('#corr-status').value = event.status || 'in_progress';
+  $('#corr-next-action').value = event.next_action || '';
+  $('#corr-reason').value = '';
+  $('#corr-error').classList.add('hidden');
+
+  // Load project list into target dropdown
+  const projSelect = $('#corr-target-project');
+  projSelect.innerHTML = (state.projects || []).map((p) =>
+    `<option value="${esc(p.path)}" data-project-id="${esc(p.project_id)}">${esc(p.title || p.project_id)}</option>`
+  ).join('');
+  // Select current project by default
+  if (state.currentProject) {
+    const opt = projSelect.querySelector(`option[value="${esc(state.currentProject.path)}"]`);
+    if (opt) opt.selected = true;
+  }
+  // Load tasks for the selected project
+  loadCorrectionTargetTasks();
+
+  $('#corr-preview').classList.add('hidden');
+  $('#correction-modal').classList.remove('hidden');
+}
+
+function closeCorrectionModal() {
+  $('#correction-modal').classList.add('hidden');
+  _correctionEvent = null;
+}
+
+async function loadCorrectionTargetTasks() {
+  const projSelect = $('#corr-target-project');
+  const selectedPath = projSelect.value;
+  if (!selectedPath) return;
+
+  try {
+    const res = await wea.listTasks(selectedPath);
+    const items = (res && res.ok) ? (res.items || []) : [];
+
+    // Build item→tasks map: prioritize same item_id as the original event
+    const itemSelect = $('#corr-target-item');
+    const taskSelect = $('#corr-target-task');
+    itemSelect.innerHTML = '';
+    taskSelect.innerHTML = '';
+
+    // Group tasks by item
+    const groups = {};
+    items.forEach((item) => {
+      const itemId = item.item_id || '';
+      itemSelect.innerHTML += `<option value="${esc(itemId)}">${esc(item.title || itemId)}</option>`;
+      groups[itemId] = item.tasks || [];
+    });
+
+    // Select the same item_id if possible
+    if (_correctionEvent && _correctionEvent.item_id) {
+      const match = itemSelect.querySelector(`option[value="${esc(_correctionEvent.item_id)}"]`);
+      if (match) match.selected = true;
+    }
+    onCorrectionTargetItemChange();
+
+    // Bind item change to reload tasks
+    itemSelect.onchange = onCorrectionTargetItemChange;
+  } catch (e) {
+    // Ignore — dropdowns stay empty
+  }
+}
+
+function onCorrectionTargetProjectChange() {
+  loadCorrectionTargetTasks();
+}
+
+function onCorrectionTargetItemChange() {
+  const taskSelect = $('#corr-target-task');
+  taskSelect.innerHTML = '';
+  const itemId = $('#corr-target-item').value;
+  // Re-fetch task list is expensive; store last results
+  // For now, rebind from the server
+  loadCorrectionTaskOptions(itemId);
+}
+
+async function loadCorrectionTaskOptions(itemId) {
+  const projSelect = $('#corr-target-project');
+  const selectedPath = projSelect.value;
+  if (!selectedPath || !itemId) return;
+
+  try {
+    const res = await wea.listTasks(selectedPath);
+    const items = (res && res.ok) ? (res.items || []) : [];
+    const item = items.find((i) => i.item_id === itemId);
+    const tasks = item ? (item.tasks || []) : [];
+    const taskSelect = $('#corr-target-task');
+    taskSelect.innerHTML = tasks.map((t) =>
+      `<option value="${esc(t.task_id)}">${esc(t.title || t.task_id)}</option>`
+    ).join('');
+
+    // Select same task_id if possible
+    if (_correctionEvent && _correctionEvent.task_id) {
+      const match = taskSelect.querySelector(`option[value="${esc(_correctionEvent.task_id)}"]`);
+      if (match) match.selected = true;
+    }
+  } catch (e) {
+    // Ignore
+  }
+}
+
+async function submitCorrection() {
+  if (!_correctionEvent) return;
+  $('#corr-submit').disabled = true;
+  $('#corr-error').classList.add('hidden');
+
+  const sourcePath = state.currentProject ? state.currentProject.path : '';
+  const targetPath = $('#corr-target-project').value;
+  const targetTaskId = $('#corr-target-task').value;
+  const summary = $('#corr-summary').value.trim();
+  const status = $('#corr-status').value;
+  const nextAction = $('#corr-next-action').value.trim();
+  const reason = $('#corr-reason').value.trim();
+
+  if (!targetTaskId) {
+    $('#corr-error').textContent = '请选择目标任务';
+    $('#corr-error').classList.remove('hidden');
+    $('#corr-submit').disabled = false;
+    return;
+  }
+
+  try {
+    const request = {
+      project_path: sourcePath,
+      target_project_path: targetPath !== sourcePath ? targetPath : undefined,
+      original_event_id: _correctionEvent.event_id,
+      source_task_id: _correctionEvent.task_id,
+      source_item_id: _correctionEvent.item_id,
+      target_task_id: targetTaskId,
+      summary: summary || _correctionEvent.summary,
+      status: status || 'in_progress',
+      next_action: nextAction,
+      reason: reason || '用户手动纠正',
+    };
+
+    const res = await wea.correctEvent(request);
+    if (!res || !res.ok) {
+      $('#corr-error').textContent = `纠正失败：${(res && res.error) || '后端错误'}`;
+      $('#corr-error').classList.remove('hidden');
+      return;
+    }
+
+    closeCorrectionModal();
+    toast('纠正已提交', 'ok');
+    await refreshCurrent();
+  } catch (err) {
+    $('#corr-error').textContent = `纠正出错：${err.message || err}`;
+    $('#corr-error').classList.remove('hidden');
+  } finally {
+    $('#corr-submit').disabled = false;
   }
 }
 
