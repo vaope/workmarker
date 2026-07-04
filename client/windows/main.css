@@ -221,8 +221,9 @@ button { font-family: inherit; cursor: pointer; }
 .modal-card.small-card { width: 420px; }
 .modal-card h2 { margin: 0 0 18px; font-size: 18px; }
 .field { display: block; margin-bottom: 14px; color: var(--text-dim); font-size: 13px; }
-.field input, .field select { display: block; width: 100%; margin-top: 6px; background: var(--bg-2); border: 1px solid var(--border);
+.field input, .field select, .field textarea { display: block; width: 100%; margin-top: 6px; background: var(--bg-2); border: 1px solid var(--border);
   color: var(--text); border-radius: 8px; padding: 9px 12px; font-size: 14px; }
+.field textarea { resize: vertical; min-height: 48px; }
 .field .hint { color: var(--text-faint); font-size: 11px; margin-top: 4px; display: block; }
 .settings-row { display: flex; gap: 8px; margin-top: 6px; }
 .settings-row input { flex: 1; margin-top: 0; }

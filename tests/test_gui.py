@@ -1159,6 +1159,174 @@ class UpdateItemTest(unittest.TestCase):
             tmp.cleanup()
 
 
+class ItemBackgroundTests(unittest.TestCase):
+    """Tests for item background field: parse, create, update, clear."""
+
+    def _setup(self):
+        tmp = tempfile.TemporaryDirectory()
+        ws = Path(tmp.name)
+        db = ws / "index.sqlite"
+        init = handle_init({
+            "workspace": str(ws), "title": "Background Test", "project_id": "bg-test",
+            "db_path": str(db), "items": [
+                {"title": "Normal Item", "tasks": ["Task A"]},
+            ],
+        })
+        return tmp, ws, db, Path(init["project_path"])
+
+    def _create_item(self, proj: Path, db: Path, title: str, background: str = ""):
+        return handle_create_item({
+            "project_path": str(proj), "db_path": str(db),
+            "title": title, "background": background,
+        })
+
+    def test_parse_item_without_background_returns_empty_string(self):
+        """Old doc without background: parse returns background=''."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            items = handle_tasks({"project_path": str(proj)})["items"]
+            self.assertEqual(items[0]["background"], "")
+            self.assertIn("background", items[0])  # key exists, just empty
+        finally:
+            tmp.cleanup()
+
+    def test_create_item_with_background(self):
+        """Create item with background; verify markdown output and parser round-trip."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            result = self._create_item(proj, db, "With BG", "解释为什么做这个需求")
+            self.assertTrue(result["ok"])
+
+            text = proj.read_text(encoding="utf-8")
+            self.assertIn("- background: 解释为什么做这个需求", text)
+
+            items = handle_tasks({"project_path": str(proj)})["items"]
+            bg_item = next(it for it in items if it["title"] == "With BG")
+            self.assertEqual(bg_item["background"], "解释为什么做这个需求")
+        finally:
+            tmp.cleanup()
+
+    def test_create_item_without_background_has_no_background_line(self):
+        """Create without background: no - background: line in markdown."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            result = self._create_item(proj, db, "No BG")
+            self.assertTrue(result["ok"])
+
+            text = proj.read_text(encoding="utf-8")
+            self.assertNotIn("- background:", text)
+        finally:
+            tmp.cleanup()
+
+    def test_update_item_set_background(self):
+        """Set background on an existing item that had none."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            items = handle_tasks({"project_path": str(proj)})["items"]
+            item_id = items[0]["item_id"]
+
+            result = handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": item_id, "title": items[0]["title"],
+                "background": "新的背景说明",
+            })
+            self.assertTrue(result["ok"])
+
+            text = proj.read_text(encoding="utf-8")
+            self.assertIn("- background: 新的背景说明", text)
+
+            after = handle_tasks({"project_path": str(proj)})["items"]
+            self.assertEqual(after[0]["background"], "新的背景说明")
+            # Anchor preserved
+            self.assertIn(f"<!-- item:{item_id} -->", text)
+        finally:
+            tmp.cleanup()
+
+    def test_update_item_change_background(self):
+        """Change existing background to a new value."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            items = handle_tasks({"project_path": str(proj)})["items"]
+            item_id = items[0]["item_id"]
+
+            # Set first
+            handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": item_id, "title": items[0]["title"],
+                "background": "原始背景",
+            })
+            # Change
+            result = handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": item_id, "title": items[0]["title"],
+                "background": "更新后的背景",
+            })
+            self.assertTrue(result["ok"])
+
+            text = proj.read_text(encoding="utf-8")
+            self.assertNotIn("原始背景", text)
+            self.assertIn("- background: 更新后的背景", text)
+            # Only one background line
+            self.assertEqual(text.count("- background:"), 1)
+        finally:
+            tmp.cleanup()
+
+    def test_update_item_clear_background(self):
+        """Clear background by passing empty string."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            items = handle_tasks({"project_path": str(proj)})["items"]
+            item_id = items[0]["item_id"]
+
+            # Set first
+            handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": item_id, "title": items[0]["title"],
+                "background": "待清除",
+            })
+            # Clear
+            result = handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": item_id, "title": items[0]["title"],
+                "background": "",
+            })
+            self.assertTrue(result["ok"])
+
+            text = proj.read_text(encoding="utf-8")
+            self.assertNotIn("- background:", text)
+
+            after = handle_tasks({"project_path": str(proj)})["items"]
+            self.assertEqual(after[0]["background"], "")
+        finally:
+            tmp.cleanup()
+
+    def test_update_item_title_only_does_not_affect_background(self):
+        """Updating only title (no background key) leaves background unchanged."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            items = handle_tasks({"project_path": str(proj)})["items"]
+            item_id = items[0]["item_id"]
+
+            # Set background first
+            handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": item_id, "title": items[0]["title"],
+                "background": "保持不变",
+            })
+            # Update only title
+            result = handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": item_id, "title": "Renamed Only",
+            })
+            self.assertTrue(result["ok"])
+
+            text = proj.read_text(encoding="utf-8")
+            self.assertIn("- background: 保持不变", text)
+            self.assertIn("### Item: Renamed Only", text)
+        finally:
+            tmp.cleanup()
+
+
 # ── update task ────────────────────────────────────────────
 
 class UpdateTaskTest(unittest.TestCase):

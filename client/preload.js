@@ -14,13 +14,13 @@ contextBridge.exposeInMainWorld('wea', {
   listTasks: (projectPath) => ipcRenderer.invoke('wea:listTasks', { projectPath }),
   listTimeline: (projectPath) => ipcRenderer.invoke('wea:listTimeline', { projectPath }),
   initProject: (spec) => ipcRenderer.invoke('wea:initProject', spec),
-  createItem: (projectPath, title) => ipcRenderer.invoke('wea:createItem', { projectPath, title }),
+  createItem: (projectPath, title, background) => ipcRenderer.invoke('wea:createItem', { projectPath, title, background }),
   createTask: (projectPath, itemId, title) =>
     ipcRenderer.invoke('wea:createTask', { projectPath, itemId, title }),
   deleteItem: (projectPath, itemId) => ipcRenderer.invoke('wea:deleteItem', { projectPath, itemId }),
   deleteTask: (projectPath, taskId) => ipcRenderer.invoke('wea:deleteTask', { projectPath, taskId }),
-  updateItem: (projectPath, itemId, title) =>
-    ipcRenderer.invoke('wea:updateItem', { projectPath, itemId, title }),
+  updateItem: (projectPath, itemId, title, background) =>
+    ipcRenderer.invoke('wea:updateItem', { projectPath, itemId, title, background }),
   updateTask: (projectPath, taskId, field, value) =>
     ipcRenderer.invoke('wea:updateTask', { projectPath, taskId, field, value }),
   generateReport: (request) => ipcRenderer.invoke('wea:generateReport', request || {}),

@@ -136,11 +136,32 @@
       <label class="field"><span id="manual-name-label">需求名称</span>
         <input id="manual-name" type="text" placeholder="例如：明确项目需求" />
       </label>
+      <label class="field">背景介绍 <span class="hint">（可选）</span>
+        <textarea id="manual-background" rows="2" placeholder="为什么做这个需求、范围、重要约束"></textarea>
+      </label>
       <div class="modal-actions">
         <button id="manual-cancel" class="ghost">取消</button>
         <button id="manual-create" class="primary">创建</button>
       </div>
       <div id="manual-error" class="modal-error hidden"></div>
+    </div>
+  </div>
+
+  <!-- 编辑需求模态 -->
+  <div id="edit-item-modal" class="modal hidden">
+    <div class="modal-card small-card">
+      <h2>编辑需求</h2>
+      <label class="field">需求名称
+        <input id="edit-item-title" type="text" placeholder="需求名称" />
+      </label>
+      <label class="field">背景介绍 <span class="hint">（可选）</span>
+        <textarea id="edit-item-background" rows="3" placeholder="为什么做这个需求、范围、重要约束"></textarea>
+      </label>
+      <div class="modal-actions">
+        <button id="edit-item-cancel" class="ghost">取消</button>
+        <button id="edit-item-save" class="primary">保存</button>
+      </div>
+      <div id="edit-item-error" class="modal-error hidden"></div>
     </div>
   </div>
 

@@ -315,7 +315,12 @@ def handle_tasks(request: dict) -> dict:
 
     # Group tasks by item
     items_map: dict[str, dict] = {
-        item["item_id"]: {"item_id": item["item_id"], "title": item["title"], "tasks": []}
+        item["item_id"]: {
+            "item_id": item["item_id"],
+            "title": item["title"],
+            "background": item.get("background", ""),
+            "tasks": [],
+        }
         for item in work_map_items
     }
     for wt in work_map_tasks:
@@ -816,6 +821,7 @@ def handle_create_item(request: dict) -> dict:
     project_path = Path(request["project_path"])
     db_path = Path(request["db_path"])
     title = request.get("title", "").strip()
+    background = request.get("background", "").strip() or ""
     if not title:
         return {"ok": False, "kind": "invalid_input", "error": "item title is required"}
 
@@ -824,7 +830,7 @@ def handle_create_item(request: dict) -> dict:
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     try:
-        updated = _insert_item_block(text, title, item_id, date_str)
+        updated = _insert_item_block(text, title, item_id, date_str, background)
     except ValueError as exc:
         return {"ok": False, "kind": "invalid_project", "error": str(exc)}
 
@@ -981,12 +987,17 @@ def handle_update_item(request: dict) -> dict:
     db_path = Path(request["db_path"])
     item_id = request["item_id"]
     title = request.get("title", "").strip()
+    background = request.get("background")
+    # background: None = no change; str = set/update; "" = clear
+    if background is not None:
+        background = background.strip() or ""
+
     if not title:
         return {"ok": False, "kind": "invalid_input", "error": "item title is required"}
 
     text = project_path.read_text(encoding="utf-8")
     try:
-        updated = _update_item_title(text, item_id, title)
+        updated = _update_item_block(text, item_id, title, background)
     except ValueError as exc:
         return {"ok": False, "kind": "invalid_project", "error": str(exc)}
 
@@ -996,15 +1007,71 @@ def handle_update_item(request: dict) -> dict:
     return {"ok": True, "item_id": item_id, "title": title}
 
 
-def _update_item_title(text: str, item_id: str, new_title: str) -> str:
-    """Rename an item — preserves the anchor id, only changes display text."""
+def _update_item_block(
+    text: str, item_id: str, new_title: str, background: str | None,
+) -> str:
+    """Update an item — title and/or background. Preserves the anchor id."""
+    # 1. Rename title
     pattern = rf"(### Item:\s+).+?(\s*<!--\s*item:{re.escape(item_id)}\s*-->)"
     updated = re.sub(pattern, lambda m: f"{m.group(1)}{new_title}{m.group(2)}", text, count=1)
+
+    # 2. Update background (if requested)
+    if background is not None:
+        updated = _set_item_background(updated, item_id, background)
+
     if updated == text:
         raise ValueError(f"Item anchor not found: <!-- item:{item_id} -->")
+
     return _bump_updated_text(
         updated, datetime.now(timezone.utc).strftime("%Y-%m-%d")
     )
+
+
+def _set_item_background(text: str, item_id: str, background: str) -> str:
+    """Insert, update, or remove the ``- background:`` line for *item_id*.
+
+    *background* is already stripped: empty string means "remove".
+    """
+    item_anchor = f"<!-- item:{item_id} -->"
+    lines = text.splitlines(keepends=True)
+
+    # Locate the item heading line
+    item_idx = None
+    for i, line in enumerate(lines):
+        if item_anchor in line:
+            item_idx = i
+            break
+    if item_idx is None:
+        raise ValueError(f"Item anchor not found: {item_anchor}")
+
+    # Find existing background line after the heading (before next heading)
+    bg_idx = None
+    for j in range(item_idx + 1, len(lines)):
+        stripped = lines[j].strip()
+        if (stripped.startswith("### ") or
+                stripped.startswith("#### ") or
+                stripped.startswith("## ")):
+            break
+        if re.match(r"^-\s*background:", stripped):
+            bg_idx = j
+            break
+
+    if background:
+        bg_line = f"- background: {background}\n"
+        if bg_idx is not None:
+            lines[bg_idx] = bg_line
+        else:
+            # Insert after item heading line, before next heading / blank line
+            insert_at = item_idx + 1
+            # Skip blank lines right after the heading
+            while insert_at < len(lines) and lines[insert_at].strip() == "":
+                insert_at += 1
+            lines.insert(insert_at, bg_line)
+    elif bg_idx is not None:
+        # Remove: drop the line and any trailing blank that follows
+        del lines[bg_idx]
+
+    return "".join(lines)
 
 
 # ── update_task ────────────────────────────────────────────
@@ -1126,7 +1193,7 @@ def _generate_init_markdown(
     return "\n".join(lines)
 
 
-def _insert_item_block(text: str, title: str, item_id: str, updated_date: str) -> str:
+def _insert_item_block(text: str, title: str, item_id: str, updated_date: str, background: str = "") -> str:
     work_map_match = re.search(r"(## Work Map\s*\n)", text)
     if not work_map_match:
         raise ValueError("## Work Map section not found")
@@ -1136,7 +1203,10 @@ def _insert_item_block(text: str, title: str, item_id: str, updated_date: str) -
 
     prefix = text[:insert_pos].rstrip() + "\n\n"
     suffix = text[insert_pos:].lstrip("\n")
-    block = f"### Item: {title} <!-- item:{item_id} -->\n\n"
+    block = f"### Item: {title} <!-- item:{item_id} -->\n"
+    if background:
+        block += f"- background: {background}\n"
+    block += "\n"
     return _bump_updated_text(prefix + block + suffix, updated_date)
 
 
@@ -1264,12 +1334,18 @@ def _parse_timeline_events(text: str) -> list[dict]:
 # ── Work Map task parser ─────────────────────────────────
 
 def _parse_work_map_items(text: str) -> list[dict]:
-    """Parse ## Work Map item headings, including items that have no tasks yet."""
+    """Parse ## Work Map item headings, including items that have no tasks yet.
+
+    Also captures optional ``- background:`` lines between the item heading and
+    the next heading (next Item / Task / section).
+    """
     items: list[dict] = []
     in_work_map = False
     item_re = re.compile(r"^###\s+Item:\s+(.+?)\s*<!--\s*item:(.+?)\s*-->")
+    bg_re = re.compile(r"^-\s*background:\s*(.*)")
 
-    for line in text.splitlines():
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped == "## Work Map":
             in_work_map = True
@@ -1280,10 +1356,24 @@ def _parse_work_map_items(text: str) -> list[dict]:
         if in_work_map:
             match = item_re.match(line)
             if match:
-                items.append({
+                item: dict = {
                     "item_id": match.group(2).strip(),
                     "title": match.group(1).strip(),
-                })
+                }
+                # Look ahead for - background: before the next heading
+                for ahead in range(i + 1, len(lines)):
+                    next_stripped = lines[ahead].strip()
+                    if (next_stripped.startswith("### ") or
+                            next_stripped.startswith("#### ") or
+                            next_stripped.startswith("## ")):
+                        break
+                    bg_match = bg_re.match(next_stripped)
+                    if bg_match:
+                        bg_val = bg_match.group(1).strip()
+                        if bg_val:
+                            item["background"] = bg_val
+                        break
+                items.append(item)
 
     return items
 

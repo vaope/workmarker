@@ -68,6 +68,17 @@ function bindStaticHandlers() {
   $('#manual-name').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); createManualEntry(); }
   });
+
+  // edit-item modal
+  $('#edit-item-cancel').addEventListener('click', closeEditItemModal);
+  $('#edit-item-save').addEventListener('click', saveEditItem);
+  $('#edit-item-title').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); saveEditItem(); }
+    if (e.key === 'Escape') { closeEditItemModal(); }
+  });
+  $('#edit-item-background').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { closeEditItemModal(); }
+  });
   $('#settings-cancel').addEventListener('click', () => $('#settings-modal').classList.add('hidden'));
   $('#settings-pick-workspace').addEventListener('click', pickSettingsWorkspace);
   $('#settings-save').addEventListener('click', saveSettings);
@@ -275,10 +286,59 @@ function renderTimeline() {
 
 // ---- inline edit / delete helpers ----------------------------------------
 
+function openEditItemModal(item) {
+  state.editingItem = item;
+  $('#edit-item-title').value = item.title || '';
+  $('#edit-item-background').value = item.background || '';
+  $('#edit-item-error').classList.add('hidden');
+  $('#edit-item-save').disabled = false;
+  $('#edit-item-modal').classList.remove('hidden');
+  $('#edit-item-title').focus();
+}
+
+function closeEditItemModal() {
+  $('#edit-item-modal').classList.add('hidden');
+  state.editingItem = null;
+}
+
+async function saveEditItem() {
+  const title = $('#edit-item-title').value.trim();
+  if (!title) {
+    $('#edit-item-error').textContent = '需求名称不能为空';
+    $('#edit-item-error').classList.remove('hidden');
+    return;
+  }
+
+  $('#edit-item-save').disabled = true;
+  $('#edit-item-error').classList.add('hidden');
+  const background = $('#edit-item-background').value.trim();
+
+  try {
+    const res = await wea.updateItem(
+      state.currentProject.path,
+      state.editingItem.item_id,
+      title,
+      background
+    );
+    if (!res || !res.ok) {
+      $('#edit-item-error').textContent = `保存失败：${(res && res.error) || '后端错误'}`;
+      $('#edit-item-error').classList.remove('hidden');
+      return;
+    }
+    closeEditItemModal();
+    toast('需求已更新', 'ok');
+    await refreshCurrent();
+  } catch (err) {
+    $('#edit-item-error').textContent = `保存出错：${err.message || err}`;
+    $('#edit-item-error').classList.remove('hidden');
+  } finally {
+    $('#edit-item-save').disabled = false;
+  }
+}
+
 function promptEditItem(item) {
-  const name = prompt('重命名需求：', item.title);
-  if (!name || name.trim() === '' || name.trim() === item.title) return;
-  doUpdateItem(item.item_id, name.trim());
+  // Replaced by in-app modal — kept for compatibility, routed to modal
+  openEditItemModal(item);
 }
 
 async function doUpdateItem(itemId, title) {
@@ -554,6 +614,17 @@ function openManualModal(mode, itemId = '') {
   state.manualItemId = itemId || '';
   $('#manual-error').classList.add('hidden');
   $('#manual-name').value = '';
+  $('#manual-background').value = '';
+  $('#manual-name').disabled = false;
+  $('#manual-name').readOnly = false;
+
+  // Defensive reset: ensure input is fully interactable
+  const input = $('#manual-name');
+  input.disabled = false;
+  input.removeAttribute('readonly');
+  input.readOnly = false;
+
+  $('#manual-create').disabled = false;
 
   const isTask = mode === 'task';
   $('#manual-title').textContent = isTask ? '新建工作项' : '新建需求';
@@ -575,7 +646,7 @@ function openManualModal(mode, itemId = '') {
   }
 
   $('#manual-modal').classList.remove('hidden');
-  $('#manual-name').focus();
+  requestAnimationFrame(() => $('#manual-name').focus());
 }
 
 function closeManualModal() {
@@ -594,9 +665,10 @@ async function createManualEntry() {
 
   $('#manual-create').disabled = true;
   try {
+    const background = $('#manual-background').value.trim();
     const res = mode === 'task'
       ? await wea.createTask(state.currentProject.path, $('#manual-item').value, title)
-      : await wea.createItem(state.currentProject.path, title);
+      : await wea.createItem(state.currentProject.path, title, background);
 
     if (!res || !res.ok) {
       showManualError(`创建失败：${(res && res.error) || '后端未返回结果'}`);
