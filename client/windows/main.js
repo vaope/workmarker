@@ -265,6 +265,62 @@ function eventLine(e) {
 }
 
 // ---- timeline view -------------------------------------------------------
+// ---- inbox view ----------------------------------------------------------
+
+async function loadInbox() {
+  try {
+    const res = await wea.listCaptures();
+    state.inboxCards = (res && res.ok) ? (res.cards || []) : [];
+    renderInbox();
+  } catch (_) {
+    state.inboxCards = [];
+    $('#inbox-body').innerHTML = '<div class="empty">Inbox load failed</div>';
+  }
+}
+
+function renderInbox() {
+  const groups = { needs_confirmation: [], processing: [], error: [], archived: [], canceled: [] };
+  (state.inboxCards || []).forEach(function(card) {
+    if (groups[card.state]) groups[card.state].push(card);
+  });
+  $('#inbox-body').innerHTML = [
+    renderInboxGroup('Needs confirmation', groups.needs_confirmation, true),
+    renderInboxGroup('Processing', groups.processing, false),
+    renderInboxGroup('Errors', groups.error, false),
+    renderInboxGroup('Recent archived', groups.archived.slice(0, 20), false),
+  ].join('');
+  bindInboxActions();
+}
+
+function renderInboxGroup(label, cards, showConfirm) {
+  if (!cards.length) return '';
+  return '<div class="inbox-group"><h3 class="inbox-group-title">' + label + ' (' + cards.length + ')</h3>' +
+    cards.map(function(c) {
+      var s = (c.proposal && c.proposal.event) ? c.proposal.event.summary : c.text;
+      var icon = c.state === 'processing' ? '\u23F3' : c.state === 'error' ? '\u274C' : c.state === 'archived' ? '\uD83D\uDCC1' : '\u2705';
+      var proj = c.selected_project ? esc(c.selected_project.title || '') : '';
+      return '<div class="inbox-card"><div class="inbox-card-title">' + icon + ' ' + esc(s || c.text).substring(0, 80) + '</div>' +
+        '<div class="inbox-card-meta">' + (proj ? 'Project: ' + proj : '') + (c.state === 'error' ? ' ' + esc(c.error || '') : '') + '</div>' +
+        '<div class="inbox-actions">' + renderInboxCardActions(c, showConfirm) + '</div></div>';
+    }).join('') + '</div>';
+}
+
+function renderInboxCardActions(card, showConfirm) {
+  var parts = [];
+  var id = esc(card.capture_id);
+  if (showConfirm && card.state === 'needs_confirmation') parts.push('<button class="small inbox-confirm" data-id="' + id + '">Confirm</button>');
+  if (card.state === 'needs_confirmation' && card.selected_project && card.selected_project.path) parts.push('<button class="ghost small inbox-open" data-id="' + id + '" data-path="' + esc(card.selected_project.path) + '">Open Project</button>');
+  if (card.state === 'error') parts.push('<button class="ghost small inbox-retry" data-id="' + id + '">Retry</button>');
+  if (card.state !== 'archived') parts.push('<button class="ghost small inbox-cancel" data-id="' + id + '">Cancel</button>');
+  return parts.join('');
+}
+
+function bindInboxActions() {
+  document.querySelectorAll('.inbox-confirm').forEach(function(btn) { btn.addEventListener('click', async function() { btn.textContent = '...'; btn.disabled = true; await wea.commitCapture(btn.dataset.id, {}); loadInbox(); }); });
+  document.querySelectorAll('.inbox-retry').forEach(function(btn) { btn.addEventListener('click', async function() { btn.textContent = '...'; btn.disabled = true; await wea.processCapture(btn.dataset.id); loadInbox(); }); });
+  document.querySelectorAll('.inbox-cancel').forEach(function(btn) { btn.addEventListener('click', async function() { btn.textContent = '...'; btn.disabled = true; await wea.cancelCapture(btn.dataset.id); loadInbox(); }); });
+  document.querySelectorAll('.inbox-open').forEach(function(btn) { btn.addEventListener('click', function() { var proj = state.projectList.find(function(p) { return p.path === btn.dataset.path; }); if (proj) selectProject(proj); }); });
+}
 function renderTimeline() {
   const body = $('#timeline-body');
   const events = (state.timelineData && state.timelineData.events) || [];

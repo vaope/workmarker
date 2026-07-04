@@ -42,6 +42,7 @@
             <button class="tab active" data-view="tasks">任务视图</button>
             <button class="tab" data-view="timeline">时间线</button>
             <button class="tab" data-view="reports">报告</button>
+            <button class="tab" data-view="inbox">收件箱</button>
           </div>
           <button id="new-item" class="ghost small">+ 新建需求</button>
         </div>
@@ -86,6 +87,14 @@
           <span id="report-status" class="report-status"></span>
         </div>
         <div id="reports-body" class="scroll-body report-body"></div>
+      </section>
+
+      <section id="inbox-view" class="view hidden">
+        <div class="view-head">
+          <h2>收件箱</h2>
+          <button class="ghost" id="inbox-refresh">刷新</button>
+        </div>
+        <div id="inbox-body" class="inbox-body scroll-body"></div>
       </section>
 
       <!-- 确认卡片（浮于输入条上方） -->

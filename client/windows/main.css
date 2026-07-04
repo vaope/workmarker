@@ -299,3 +299,12 @@ button.danger.small-btn { padding: 6px 12px; font-size: 13px; border-radius: 7px
 .report-toolbar input[type="date"] {
   width: 130px;
 }
+
+/* ---- inbox ---- */
+.inbox-body { padding: 12px 0; }
+.inbox-group { margin-bottom: 16px; }
+.inbox-group-title { font-size: 13px; font-weight: 600; color: var(--text-dim); margin: 0 0 6px; padding: 0 4px; }
+.inbox-card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; background: var(--panel); }
+.inbox-card-title { font-weight: 500; margin-bottom: 4px; }
+.inbox-card-meta { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.inbox-actions { display: flex; gap: 6px; flex-wrap: wrap; }
