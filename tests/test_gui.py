@@ -1158,6 +1158,68 @@ class UpdateItemTest(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_update_item_noop_save_succeeds(self):
+        """no-op save (same title, no background change) must return ok, not false error."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            items = handle_tasks({"project_path": str(proj)})["items"]
+            item_id = items[0]["item_id"]
+            orig_title = items[0]["title"]
+
+            result = handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": item_id, "title": orig_title,
+            })
+            self.assertTrue(result["ok"], f"expected ok, got {result}")
+            self.assertEqual(result["item_id"], item_id)
+            self.assertEqual(result["title"], orig_title)
+
+            # Verify markdown unchanged (item still exists)
+            text = proj.read_text(encoding="utf-8")
+            self.assertIn(f"<!-- item:{item_id} -->", text)
+        finally:
+            tmp.cleanup()
+
+    def test_update_item_noop_with_background_succeeds(self):
+        """no-op save (same title + same background) must return ok."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            items = handle_tasks({"project_path": str(proj)})["items"]
+            item_id = items[0]["item_id"]
+            orig_title = items[0]["title"]
+
+            # First set a background
+            result = handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": item_id, "title": orig_title,
+                "background": "some context",
+            })
+            self.assertTrue(result["ok"])
+
+            # Now no-op: same title and same background
+            result = handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": item_id, "title": orig_title,
+                "background": "some context",
+            })
+            self.assertTrue(result["ok"], f"no-op with same background should succeed, got {result}")
+            self.assertEqual(result["item_id"], item_id)
+        finally:
+            tmp.cleanup()
+
+    def test_update_item_noop_unknown_item_still_fails(self):
+        """no-op on unknown item must still raise error (anchor genuinely not found)."""
+        tmp, ws, db, proj = self._setup()
+        try:
+            result = handle_update_item({
+                "project_path": str(proj), "db_path": str(db),
+                "item_id": "nonexistent", "title": "Whatever",
+            })
+            self.assertFalse(result["ok"])
+            self.assertEqual(result.get("kind"), "invalid_project")
+        finally:
+            tmp.cleanup()
+
 
 class ItemBackgroundTests(unittest.TestCase):
     """Tests for item background field: parse, create, update, clear."""

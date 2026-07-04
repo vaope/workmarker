@@ -1011,6 +1011,10 @@ def _update_item_block(
     text: str, item_id: str, new_title: str, background: str | None,
 ) -> str:
     """Update an item — title and/or background. Preserves the anchor id."""
+    item_anchor = f"<!-- item:{item_id} -->"
+    if item_anchor not in text:
+        raise ValueError(f"Item anchor not found: {item_anchor}")
+
     # 1. Rename title
     pattern = rf"(### Item:\s+).+?(\s*<!--\s*item:{re.escape(item_id)}\s*-->)"
     updated = re.sub(pattern, lambda m: f"{m.group(1)}{new_title}{m.group(2)}", text, count=1)
@@ -1019,8 +1023,9 @@ def _update_item_block(
     if background is not None:
         updated = _set_item_background(updated, item_id, background)
 
+    # 3. If nothing changed, succeed as no-op (user opened edit modal and saved without changes)
     if updated == text:
-        raise ValueError(f"Item anchor not found: <!-- item:{item_id} -->")
+        return text
 
     return _bump_updated_text(
         updated, datetime.now(timezone.utc).strftime("%Y-%m-%d")
