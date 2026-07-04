@@ -1,15 +1,15 @@
 // capture.js (renderer) — quick-capture floating window logic.
+// Inbox model: multiple in-flight cards; state.proposal is gone.
 const $ = (s) => document.querySelector(s);
 
 const state = {
   config: null,
   projects: [],
   pending: [],
-  proposal: null,
-  selectedProject: null,
+  cards: [],           // active inbox cards (needs_confirmation, processing, error)
+  selectedCardId: '',  // which card's confirm view is showing
   busy: false,
-  phase: 'input',
-  bufferedText: '',
+  phase: 'input',      // 'input' | 'confirm' | 'processing' | 'error' — drives visibility/layout only
   lastText: '',
 };
 
@@ -19,10 +19,14 @@ async function boot() {
   await loadProjects();
   wea.onShowCapture(() => {
     // Non-input phases carry user-visible state and must survive hide/show.
-    if (state.phase !== 'input') return;
+    if (state.phase !== 'input') {
+      reloadCards();
+      return;
+    }
     reset();
   });
-  wea.onArchived(() => {/* keep recent line; nothing else */});
+  wea.onArchived(() => reloadCards());
+  wea.onInboxUpdated(() => reloadCards());
   reset();
 }
 
@@ -49,11 +53,26 @@ function bind() {
 function reset() {
   setCaptureState('input', { clearInput: true, clearAttachments: true, status: '' });
   loadProjects();
+  reloadCards();
   setTimeout(() => $('#cap-input').focus(), 30);
   resize();
 }
 
+async function reloadCards() {
+  const res = await wea.listCaptures();
+  state.cards = (res && res.ok && res.cards) ? res.cards.filter(
+    (c) => c.state === 'needs_confirmation' || c.state === 'processing' || c.state === 'error'
+  ) : [];
+  renderCardList();
+  // If we're in confirm view and the selected card is gone, go back to input
+  if (state.selectedCardId && !state.cards.find((c) => c.capture_id === state.selectedCardId)) {
+    state.selectedCardId = '';
+    if (state.phase === 'confirm') setCaptureState('input', { status: '' });
+  }
+}
+
 function setCaptureState(phase, data = {}) {
+  // Visibility/layout only — never store proposal data here.
   state.phase = phase;
   $('#cap-input-area').classList.remove('hidden');
   $('.cap-foot') && $('.cap-foot').classList.remove('hidden');
@@ -62,10 +81,8 @@ function setCaptureState(phase, data = {}) {
     $('#cap-confirm').classList.add('hidden');
     if (data.clearInput) $('#cap-input').value = '';
     if (data.clearAttachments) state.pending = [];
-    state.proposal = null;
-    state.selectedProject = null;
+    state.selectedCardId = '';
     state.busy = false;
-    state.bufferedText = '';
     state.lastText = '';
     $('#cap-submit').disabled = false;
     $('#cap-submit').textContent = '提交';
@@ -88,13 +105,11 @@ function setCaptureState(phase, data = {}) {
 
   if (phase === 'confirm') {
     state.busy = false;
-    state.bufferedText = $('#cap-input').value;
-    state.proposal = data.proposal;
-    state.selectedProject = data.selectedProject;
+    state.selectedCardId = data.cardId || '';
     $('#cap-submit').disabled = true;
     $('#cap-submit').textContent = '确认中';
-    setStatus('确认卡片已生成，可以继续输入草稿', '');
-    renderConfirm(data.proposal, !!data.lowConfidence, data.selectedProject, data.route);
+    setStatus(data.status || '');
+    renderCardConfirm(data.card);
     return;
   }
 
@@ -103,7 +118,7 @@ function setCaptureState(phase, data = {}) {
     $('#cap-submit').disabled = false;
     $('#cap-submit').textContent = '提交';
     setStatus('');
-    renderError(data.message || '未知错误', data.kind || '');
+    renderError(data.message || '未知错误', data.kind || '', data.card);
   }
 }
 
@@ -147,25 +162,33 @@ async function submit() {
 
   setCaptureState('processing', { text });
 
-  wea.routePropose(text, state.pending.map((p) => p.tempPath))
-    .then((res) => {
-      if (!res || !res.ok) {
-        const msg = (res && res.error) || '后端未就绪';
-        const kind = (res && res.kind) || '';
-        setCaptureState('error', { message: msg, kind });
-        return;
-      }
-      setCaptureState('confirm', {
-        proposal: res.proposal,
-        selectedProject: res.selected_project,
-        route: res.route,
-        lowConfidence: res.low_confidence,
-      });
-    })
-    .catch((err) => {
-      setCaptureState('error', { message: err.message || String(err), kind: 'crash' });
-    });
+  // Create inbox card with processing state
+  const created = await wea.createCapture(text, state.pending.map((p) => ({ tempPath: p.tempPath || '', filename: p.filename || '' })));
+  if (!created || !created.ok) {
+    setCaptureState('error', { message: (created && created.error) || '创建失败', kind: (created && created.kind) || 'create_error' });
+    return;
+  }
 
+  // Trigger backend processing (routing + archivist)
+  const processed = await wea.processCapture(created.card.capture_id);
+  if (!processed || !processed.ok) {
+    setCaptureState('error', {
+      message: (processed && processed.error) || '解析失败',
+      kind: (processed && processed.kind) || 'process_error',
+      card: created.card,
+    });
+    return;
+  }
+
+  // Success: clear input and pending, show card list
+  state.pending = [];
+  renderThumbs();
+  $('#cap-input').value = '';
+  setStatus('✅ 已提交，可以继续输入下一条', '');
+  state.busy = false;
+  $('#cap-submit').disabled = false;
+  $('#cap-submit').textContent = '提交';
+  await reloadCards();
   resize();
 }
 
@@ -185,22 +208,22 @@ function renderProcessing(text) {
   resize();
 }
 
-function renderError(msg, kind) {
+function renderError(msg, kind, card) {
   const hint = kind === 'no_project'
     ? '请先在主窗口中创建或打开一个项目。'
     : kind === 'no_workspace'
     ? '请先在主窗口设置中配置项目库目录。'
     : '请检查后端是否正常运行，然后重试。';
 
-  const card = $('#cap-confirm');
-  card.innerHTML =
+  const confEl = $('#cap-confirm');
+  confEl.innerHTML =
     `<div class="ccc-head"><h3>❌ 解析失败</h3></div>
      <div class="ccc-warn">${esc(msg)}</div>
      <div class="ccc-grid"><span class="v" style="color:var(--text-dim);font-size:13px;">${hint}</span></div>
      <div class="ccc-actions">
        <button class="ghost" id="ccc-retry">🔁 重试</button>
      </div>`;
-  card.classList.remove('hidden');
+  confEl.classList.remove('hidden');
   $('#ccc-retry').addEventListener('click', () => {
     const retryText = state.lastText || '';
     setCaptureState('input', { status: '' });
@@ -210,26 +233,78 @@ function renderError(msg, kind) {
   resize();
 }
 
-function renderConfirm(proposal, lowConf, selectedProject, route) {
+// ---- card list (compact cards below input) ----
+
+function renderCardList() {
+  const wrap = $('#cap-card-list');
+  if (!wrap) return;
+  if (!state.cards.length) { wrap.innerHTML = ''; resize(); return; }
+  wrap.innerHTML = state.cards.map((c) => {
+    const statusIcon = c.state === 'processing' ? '⏳' : c.state === 'error' ? '❌' : '✅';
+    const summary = c.proposal && c.proposal.event ? c.proposal.event.summary : c.text;
+    return `<div class="inbox-card" id="card-${esc(c.capture_id)}">
+      <span>${statusIcon} ${esc(summary || c.text).substring(0, 60)}</span>
+      <div class="inbox-actions">
+        ${c.state === 'needs_confirmation' ? `<button class="primary small-btn card-confirm" data-id="${esc(c.capture_id)}">确认</button>` : ''}
+        ${c.state === 'error' ? `<button class="ghost small-btn card-retry" data-id="${esc(c.capture_id)}">重试</button>` : ''}
+        <button class="ghost small-btn card-cancel" data-id="${esc(c.capture_id)}">取消</button>
+      </div>
+    </div>`;
+  }).join('');
+  resize();
+
+  // Bind actions
+  wrap.querySelectorAll('.card-confirm').forEach((btn) => {
+    btn.addEventListener('click', () => openCardConfirm(btn.dataset.id));
+  });
+  wrap.querySelectorAll('.card-retry').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      btn.textContent = '重试中…';
+      btn.disabled = true;
+      await wea.processCapture(btn.dataset.id);
+      reloadCards();
+    });
+  });
+  wrap.querySelectorAll('.card-cancel').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      btn.textContent = '取消中…';
+      btn.disabled = true;
+      await wea.cancelCapture(btn.dataset.id);
+      reloadCards();
+    });
+  });
+}
+
+function openCardConfirm(captureId) {
+  const card = state.cards.find((c) => c.capture_id === captureId);
+  if (!card) return;
+  setCaptureState('confirm', { card, cardId: captureId, status: '' });
+}
+
+// ---- card confirm view (reads from card, not state.proposal) ----
+
+function renderCardConfirm(card) {
+  if (!card) return;
+  const proposal = card.proposal;
+  const selectedProject = card.selected_project;
   if (!selectedProject || !selectedProject.path) {
-    setStatus('项目判断失败，请重试或在主窗口归档', 'error');
+    setCaptureState('error', { message: '项目信息不完整，请取消后重新提交', kind: 'incomplete_project', card });
     return;
   }
-  const card = $('#cap-confirm');
+  const confEl = $('#cap-confirm');
   const e = proposal.event;
   const t = proposal.target;
   const conf = Math.round((proposal.confidence || 0) * 100);
   const projTitle = (selectedProject && selectedProject.title) || t.project_id;
-  const routeReason = route && route.reason ? esc(route.reason) : '';
   const taskLabel = t.new_task ? `${esc(t.task_title)}（新建）` : esc(t.task_id);
+  const lowConf = !!card.low_confidence;
 
-  card.innerHTML =
+  confEl.innerHTML =
     `<div class="ccc-head"><h3>归档预览</h3>
        <span class="ccc-conf ${lowConf ? 'low' : 'high'}">置信度 ${conf}%</span></div>` +
     (lowConf ? '<div class="ccc-warn">不太确定，请检查后确认。</div>' : '') +
     `<div class="ccc-grid">
        <span class="k">项目</span><span class="v">${esc(projTitle)}</span>
-       ${routeReason ? `<span class="k">依据</span><span class="v route-reason">${routeReason}</span>` : ''}
        <span class="k">任务</span><span class="v">${taskLabel}</span>
        <span class="k">状态</span>
        <select id="ccc-status">
@@ -238,35 +313,35 @@ function renderConfirm(proposal, lowConf, selectedProject, route) {
        </select>
        <span class="k">摘要</span><input id="ccc-summary" value="${esc(e.summary)}" />
        <span class="k">下一步</span><input id="ccc-next" value="${esc(e.next_action)}" />
-       ${state.pending.length ? `<span class="k">附件</span><span class="v">${state.pending.map((p) => esc(p.filename)).join(', ')}</span>` : ''}
      </div>
      <div class="ccc-actions">
        <button class="ghost" id="ccc-cancel">取消</button>
        <button class="primary" id="ccc-confirm">确认归档</button>
      </div>`;
-  card.classList.remove('hidden');
-  $('#ccc-cancel').addEventListener('click', () => {
+  confEl.classList.remove('hidden');
+  $('#ccc-cancel').addEventListener('click', async () => {
+    await wea.cancelCapture(card.capture_id);
     setCaptureState('input', { status: '' });
+    reloadCards();
   });
-  $('#ccc-confirm').addEventListener('click', () => commit(selectedProject.path));
+  $('#ccc-confirm').addEventListener('click', () => commitCard(card.capture_id));
   resize();
 }
 
-async function commit(projectPath) {
-  if (!state.proposal) return;
-  const p = JSON.parse(JSON.stringify(state.proposal));
-  p.event.status = $('#ccc-status').value;
-  p.event.summary = $('#ccc-summary').value;
-  p.event.next_action = $('#ccc-next').value;
+async function commitCard(captureId) {
+  const edits = {
+    summary: $('#ccc-summary').value,
+    status: $('#ccc-status').value,
+    next_action: $('#ccc-next').value,
+  };
   setStatus('正在写入…', 'loading');
   try {
-    const res = await wea.commit(p, projectPath, state.pending);
+    const res = await wea.commitCapture(captureId, edits);
     if (!res || !res.ok) {
       setCaptureState('error', { message: `写入失败：${(res && res.error) || '未知错误'}`, kind: (res && res.kind) || 'commit_error' });
       return;
     }
-    const proj = state.projects.find((x) => x.path === projectPath);
-    showRecent(`${(proj && proj.title) || ''} · ${p.event.summary}`);
+    showRecent('✅ 已归档');
     restoreInputAfterArchive();
   } catch (err) {
     setCaptureState('error', { message: `出错：${err.message || err}`, kind: 'commit_crash' });
@@ -275,6 +350,7 @@ async function commit(projectPath) {
 
 function restoreInputAfterArchive() {
   setCaptureState('input', { clearAttachments: true, status: '✅ 已归档，可以继续输入下一条' });
+  reloadCards();
   setTimeout(() => $('#cap-input').focus(), 30);
 }
 
@@ -289,7 +365,6 @@ function setStatus(msg, kind) {
 }
 
 function resize() {
-  // ask main process to fit window height to content
   requestAnimationFrame(() => {
     const h = document.querySelector('.cap').scrollHeight + 28;
     wea.resizeCapture(h);

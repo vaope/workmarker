@@ -25,6 +25,13 @@ contextBridge.exposeInMainWorld('wea', {
     ipcRenderer.invoke('wea:updateTask', { projectPath, taskId, field, value }),
   generateReport: (request) => ipcRenderer.invoke('wea:generateReport', request || {}),
 
+  // --- inbox ---
+  createCapture: (text, attachments) => ipcRenderer.invoke('wea:inboxCreate', { text, attachments: attachments || [] }),
+  listCaptures: () => ipcRenderer.invoke('wea:inboxList'),
+  processCapture: (captureId) => ipcRenderer.invoke('wea:inboxProcess', { captureId }),
+  commitCapture: (captureId, edits) => ipcRenderer.invoke('wea:inboxCommit', { captureId, edits: edits || {} }),
+  cancelCapture: (captureId) => ipcRenderer.invoke('wea:inboxCancel', { captureId }),
+
   // --- clipboard / attachments ---
   readClipboardImage: () => ipcRenderer.invoke('wea:readClipboardImage'),
   discardPending: (tempPaths) => ipcRenderer.invoke('wea:discardPending', { tempPaths: tempPaths || [] }),
@@ -44,4 +51,5 @@ contextBridge.exposeInMainWorld('wea', {
   // --- main -> renderer events ---
   onShowCapture: (cb) => ipcRenderer.on('wea:show-capture', () => cb()),
   onArchived: (cb) => ipcRenderer.on('wea:archived', (_e, payload) => cb(payload)),
+  onInboxUpdated: (cb) => ipcRenderer.on('wea:inbox-updated', (_e, payload) => cb(payload)),
 });

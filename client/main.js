@@ -170,6 +170,49 @@ function attachIpc() {
     }, c.pythonCmd);
   });
 
+  // ---- inbox ------------------------------------------------------------
+  ipcMain.handle('wea:inboxCreate', async (_e, { text, attachments }) => {
+    const c = cfg();
+    if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
+    return callBackend('inbox_create', {
+      workspace: c.workspace,
+      text,
+      attachments: (attachments || []).map((p) => ({ temp_path: p.tempPath || p, filename: p.filename || path.basename(p) })),
+    }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:inboxList', async () => {
+    const c = cfg();
+    if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
+    return callBackend('inbox_list', { workspace: c.workspace }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:inboxProcess', async (_e, { captureId }) => {
+    const c = cfg();
+    if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
+    return callBackend('inbox_process', { workspace: c.workspace, capture_id: captureId }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:inboxCommit', async (_e, { captureId, edits }) => {
+    const c = cfg();
+    if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
+    const res = await callBackend('inbox_commit', {
+      workspace: c.workspace, capture_id: captureId, edits: edits || {},
+    }, c.pythonCmd);
+    if (res && res.ok) {
+      const payload = { capture_id: captureId };
+      if (mainWindow) mainWindow.webContents.send('wea:inbox-updated', payload);
+      if (captureWindow) captureWindow.webContents.send('wea:inbox-updated', payload);
+    }
+    return res;
+  });
+
+  ipcMain.handle('wea:inboxCancel', async (_e, { captureId }) => {
+    const c = cfg();
+    if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
+    return callBackend('inbox_cancel', { workspace: c.workspace, capture_id: captureId }, c.pythonCmd);
+  });
+
   ipcMain.handle('wea:commit', async (_e, { proposal, projectPath, pendingAttachments }) => {
     const c = cfg();
     const res = await callBackend('commit', {
