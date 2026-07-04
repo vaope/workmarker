@@ -522,6 +522,7 @@ let _deleteCallback = null;
 let _deleteEscHandler = null;
 
 function showDeleteConfirm(message, onConfirm) {
+  if (_deleteEscHandler) document.removeEventListener('keydown', _deleteEscHandler);
   _deleteCallback = onConfirm;
   const card = $('#confirm-card');
   card.innerHTML =
