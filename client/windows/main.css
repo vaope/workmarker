@@ -308,3 +308,15 @@ button.danger.small-btn { padding: 6px 12px; font-size: 13px; border-radius: 7px
 .inbox-card-title { font-weight: 500; margin-bottom: 4px; }
 .inbox-card-meta { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
 .inbox-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ---- search ---- */
+.search-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+.search-bar input { flex: 1; padding: 8px 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+.search-results { padding: 0; }
+.search-header { color: var(--text-dim); font-size: 12px; margin-bottom: 8px; }
+.search-result { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; cursor: pointer; background: var(--panel); }
+.search-result:hover { border-color: var(--accent); }
+.search-kind { font-size: 11px; color: var(--accent); text-transform: uppercase; font-weight: 600; }
+.search-title { font-weight: 500; margin: 4px 0; }
+.search-snippet { font-size: 13px; color: var(--text-dim); margin-bottom: 4px; }
+.search-path { font-size: 11px; color: var(--text-faint); word-break: break-all; }

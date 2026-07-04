@@ -309,6 +309,12 @@ function attachIpc() {
     }, c.pythonCmd);
   });
 
+  ipcMain.handle('wea:search', async (_e, { query, limit }) => {
+    const c = cfg();
+    if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
+    return callBackend('search', { workspace: c.workspace, query, limit: limit || 50 }, c.pythonCmd);
+  });
+
   ipcMain.handle('wea:readClipboardImage', async () => {
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;

@@ -32,6 +32,9 @@ contextBridge.exposeInMainWorld('wea', {
   commitCapture: (captureId, edits) => ipcRenderer.invoke('wea:inboxCommit', { captureId, edits: edits || {} }),
   cancelCapture: (captureId) => ipcRenderer.invoke('wea:inboxCancel', { captureId }),
 
+  // --- search ---
+  search: (query, limit) => ipcRenderer.invoke('wea:search', { query, limit: limit || 50 }),
+
   // --- clipboard / attachments ---
   readClipboardImage: () => ipcRenderer.invoke('wea:readClipboardImage'),
   discardPending: (tempPaths) => ipcRenderer.invoke('wea:discardPending', { tempPaths: tempPaths || [] }),

@@ -88,6 +88,12 @@ function bindStaticHandlers() {
     tab.addEventListener('click', () => switchView(tab.dataset.view));
   });
 
+  // search button and Enter key
+  const srBtn = $('#search-run');
+  if (srBtn) srBtn.addEventListener('click', runSearch);
+  const gsInput = $('#global-search');
+  if (gsInput) gsInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
+
   // composer
   const input = $('#composer-input');
   input.addEventListener('input', autoGrow);
@@ -179,10 +185,61 @@ function switchView(view) {
   $('#tasks-view').classList.toggle('hidden', view !== 'tasks');
   $('#timeline-view').classList.toggle('hidden', view !== 'timeline');
   $('#reports-view').classList.toggle('hidden', view !== 'reports');
+  $('#inbox-view').classList.toggle('hidden', view !== 'inbox');
+  if (view === 'inbox') loadInbox();
+  $('#search-view').classList.toggle('hidden', view !== 'search');
   if (view === 'reports' && state.currentProject) {
     $('#report-date-from').value = todayStr();
     $('#report-date-to').value = todayStr();
   }
+}
+
+// ---- search ---------------------------------------------------------------
+
+function runSearch() {
+  const q = $('#global-search');
+  if (!q) return;
+  const query = q.value.trim();
+  if (!query) return;
+  wea.search(query, 50).then((r) => {
+    if (!r || !r.ok) {
+      $('#search-results').innerHTML = '<div class="empty">搜索失败: ' + esc((r && r.error) || '') + '</div>';
+      return;
+    }
+    if (!r.results || !r.results.length) {
+      $('#search-results').innerHTML = '<div class="empty">没有找到: ' + esc(query) + '</div>';
+      return;
+    }
+    $('#search-results').innerHTML =
+      '<div class="search-header">' + r.results.length + ' 条结果</div>' +
+      r.results.map((d) => {
+        const kindLabel = { project: '项目', item: '需求', task: '工作项', timeline: '时间线', report: '报告', inbox: '收件箱' }[d.kind] || d.kind;
+        const title = esc(d.title || d.snippet || '').substring(0, 120);
+        const path = esc(d.path || '');
+        return '<div class="search-result" data-path="' + path + '" data-kind="' + d.kind + '" data-proj-id="' + esc(d.project_id || '') + '">' +
+          '<span class="search-kind">' + kindLabel + '</span>' +
+          '<div class="search-title">' + title + '</div>' +
+          (d.snippet ? '<div class="search-snippet">' + esc(d.snippet).substring(0, 200) + '</div>' : '') +
+          (path ? '<div class="search-path">' + path + '</div>' : '') +
+        '</div>';
+      }).join('');
+    bindSearchResults();
+  }).catch((err) => {
+    $('#search-results').innerHTML = '<div class="empty">错误: ' + esc(err.message || '') + '</div>';
+  });
+}
+
+function bindSearchResults() {
+  document.querySelectorAll('.search-result').forEach((el) => {
+    el.addEventListener('click', () => {
+      const path = el.dataset.path;
+      const kind = el.dataset.kind;
+      const projId = el.dataset.projId;
+      if (kind === 'report' && path) { wea.openProjectDir(path); return; }
+      const proj = state.projectList.find((p) => p.path === path || p.project_id === projId);
+      if (proj) { selectProject(proj); switchView('tasks'); }
+    });
+  });
 }
 
 // ---- tasks view ----------------------------------------------------------

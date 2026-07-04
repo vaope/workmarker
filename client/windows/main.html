@@ -43,6 +43,7 @@
             <button class="tab" data-view="timeline">时间线</button>
             <button class="tab" data-view="reports">报告</button>
             <button class="tab" data-view="inbox">收件箱</button>
+            <button class="tab" data-view="search">搜索</button>
           </div>
           <button id="new-item" class="ghost small">+ 新建需求</button>
         </div>
@@ -95,6 +96,14 @@
           <button class="ghost" id="inbox-refresh">刷新</button>
         </div>
         <div id="inbox-body" class="inbox-body scroll-body"></div>
+      </section>
+
+      <section id="search-view" class="view hidden">
+        <div class="search-bar">
+          <input id="global-search" aria-label="搜索项目、任务、时间线、报告" placeholder="搜索项目、任务、时间线、报告…" />
+          <button class="primary" id="search-run">搜索</button>
+        </div>
+        <div id="search-results" class="search-results scroll-body"></div>
       </section>
 
       <!-- 确认卡片（浮于输入条上方） -->
