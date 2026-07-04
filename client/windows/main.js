@@ -647,6 +647,21 @@ function openManualModal(mode, itemId = '') {
 
   $('#manual-modal').classList.remove('hidden');
   requestAnimationFrame(() => $('#manual-name').focus());
+
+  // TEMP DIAG bug#2: capture DOM state when modal opens — remove after root cause confirmed
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const i = document.querySelector('#manual-name');
+    const r = i.getBoundingClientRect();
+    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    console.log('[BUG2]', JSON.stringify({
+      modalHidden: document.querySelector('#manual-modal').classList.contains('hidden'),
+      inputConnected: i.isConnected, disabled: i.disabled, readOnly: i.readOnly,
+      active: document.activeElement && document.activeElement.id,
+      topAtInputCenter: top ? (top.id || top.className || top.tagName) : null,
+      topIsInput: top === i,
+      visibleModals: [...document.querySelectorAll('.modal:not(.hidden)')].map(x => x.id),
+    }));
+  }));
 }
 
 function closeManualModal() {
