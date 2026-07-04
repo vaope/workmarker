@@ -33,7 +33,9 @@ from workeventagent.gui import (
     handle_inbox_process,
     handle_inbox_commit,
     handle_inbox_cancel,
+    handle_search,
 )
+from workeventagent.search_store import search_workspace
 from workeventagent.markdown_store import write_project_atomically
 from workeventagent.index_store import get_task, init_db, rebuild_index
 from workeventagent.opencode_runner import OpencodeRunnerError
@@ -1957,6 +1959,29 @@ class InboxHandlerTests(unittest.TestCase):
             self.assertTrue(result["ok"], str(result))
             pending_dir = ws / ".workeventagent" / "pending" / created["card"]["capture_id"]
             self.assertFalse(pending_dir.exists())
+
+
+class SearchHandlerTests(unittest.TestCase):
+    def test_search_rejects_empty_query(self):
+        result = handle_search({"workspace": ".", "query": ""})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kind"], "invalid_input")
+
+    def test_search_finds_project_text(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            from workeventagent.gui import handle_init
+            handle_init({
+                "workspace": str(ws),
+                "title": "Search Test Project",
+                "project_id": "search-test",
+                "items": [{"title": "Item X", "tasks": ["Task Alpha"]}],
+                "db_path": str(ws / "index.sqlite"),
+            })
+
+            result = handle_search({"workspace": str(ws), "query": "Search Test Project"})
+            self.assertTrue(result["ok"])
+            self.assertTrue(any("Search Test Project" in r.get("title", "") for r in result["results"]))
 
 
 if __name__ == "__main__":

@@ -28,6 +28,7 @@ from workeventagent.inbox_store import (
     list_captures,
     update_capture,
 )
+from workeventagent.search_store import search_workspace
 from workeventagent.markdown_store import ProjectDocument, write_project_atomically
 from workeventagent.models import ArchiveProposal, TargetRef, TimelineEvent
 from workeventagent.opencode_runner import (
@@ -87,6 +88,7 @@ def _main_impl() -> None:
         "inbox_process": handle_inbox_process,
         "inbox_commit": handle_inbox_commit,
         "inbox_cancel": handle_inbox_cancel,
+        "search": handle_search,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -909,6 +911,16 @@ def _inbox_attachment_paths(workspace: Path, card: dict) -> list[dict]:
         if p.exists():
             result.append({"temp_path": str(p), "filename": att.get("filename", safe)})
     return result
+
+
+# ── search ─────────────────────────────────────────────────
+
+def handle_search(request: dict) -> dict:
+    query = str(request.get("query", "")).strip()
+    if not query:
+        return {"ok": False, "kind": "invalid_input", "error": "query is required"}
+    results = search_workspace(Path(request["workspace"]), query, int(request.get("limit", 50)))
+    return {"ok": True, "results": results}
 
 
 # ── init ─────────────────────────────────────────────────
