@@ -164,6 +164,9 @@ button { font-family: inherit; cursor: pointer; }
 }
 .te-acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 4px; }
 .small-btn { padding: 6px 12px; font-size: 13px; border-radius: 7px; }
+button.danger { background: var(--red); color: #fff; border: none; border-radius: 8px; padding: 7px 16px; font-weight: 600; cursor: pointer; }
+button.danger:hover { opacity: 0.85; }
+button.danger.small-btn { padding: 6px 12px; font-size: 13px; border-radius: 7px; }
 
 /* timeline view */
 .tl-row {

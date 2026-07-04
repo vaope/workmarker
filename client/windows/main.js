@@ -353,10 +353,9 @@ async function doUpdateItem(itemId, title) {
 function confirmDeleteItem(item) {
   const taskCount = item.tasks ? item.tasks.length : 0;
   const msg = taskCount > 0
-    ? `删除「${item.title}」及其下 ${taskCount} 个工作项？\n\n此操作不可撤销。`
+    ? `删除「${item.title}」及其下 ${taskCount} 个工作项？此操作不可撤销。`
     : `删除空需求「${item.title}」？`;
-  if (!confirm(msg)) return;
-  doDeleteItem(item.item_id);
+  showDeleteConfirm(msg, () => doDeleteItem(item.item_id));
 }
 
 async function doDeleteItem(itemId) {
@@ -446,8 +445,7 @@ async function saveTaskEdits(task, newTitle, newStatus, newNext, row) {
 }
 
 function confirmDeleteTask(row, task) {
-  if (!confirm(`删除工作项「${task.title}」？\n\n时间线归档记录会保留。此操作不可撤销。`)) return;
-  doDeleteTask(task.task_id, row);
+  showDeleteConfirm(`删除工作项「${task.title}」？时间线归档记录会保留。此操作不可撤销。`, () => doDeleteTask(task.task_id, row));
 }
 
 async function doDeleteTask(taskId, row) {
@@ -519,7 +517,41 @@ async function submitUpdate() {
   }
 }
 
-// ---- confirm card --------------------------------------------------------
+// ---- in-app delete confirm (replaces native confirm() — avoids OS focus loss in Electron) ----
+let _deleteCallback = null;
+
+function showDeleteConfirm(message, onConfirm) {
+  _deleteCallback = onConfirm;
+  const card = $('#confirm-card');
+  card.innerHTML =
+    `<div class="cc-head"><h3>确认删除</h3></div>
+     <div style="color:var(--text-dim);margin-bottom:14px;font-size:14px;white-space:pre-wrap;">${esc(message)}</div>
+     <div class="cc-actions">
+       <button class="ghost" id="dc-cancel">取消</button>
+       <button class="danger small-btn" id="dc-confirm">确认删除</button>
+     </div>`;
+  card.classList.remove('hidden');
+
+  $('#dc-cancel').addEventListener('click', cancelDeleteConfirm);
+  $('#dc-confirm').addEventListener('click', commitDeleteConfirm);
+  // ESC to cancel
+  const onKey = (e) => { if (e.key === 'Escape') { document.removeEventListener('keydown', onKey); cancelDeleteConfirm(); } };
+  document.addEventListener('keydown', onKey);
+}
+
+function cancelDeleteConfirm() {
+  hideConfirmCard();
+  _deleteCallback = null;
+}
+
+function commitDeleteConfirm() {
+  const cb = _deleteCallback;
+  hideConfirmCard();
+  _deleteCallback = null;
+  if (cb) cb();
+}
+
+// ---- confirm card (archival) -----------------------------------------------
 function renderConfirmCard(proposal, lowConf) {
   const card = $('#confirm-card');
   const t = proposal.target;
@@ -573,7 +605,7 @@ function taskLabel(taskId) {
   return o ? o.label : '';
 }
 
-function hideConfirmCard() { $('#confirm-card').classList.add('hidden'); state.proposal = null; }
+function hideConfirmCard() { $('#confirm-card').classList.add('hidden'); state.proposal = null; _deleteCallback = null; }
 
 async function commitProposal() {
   if (!state.proposal) return;
@@ -647,21 +679,6 @@ function openManualModal(mode, itemId = '') {
 
   $('#manual-modal').classList.remove('hidden');
   requestAnimationFrame(() => $('#manual-name').focus());
-
-  // TEMP DIAG bug#2: capture DOM state when modal opens — remove after root cause confirmed
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    const i = document.querySelector('#manual-name');
-    const r = i.getBoundingClientRect();
-    const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    console.log('[BUG2]', JSON.stringify({
-      modalHidden: document.querySelector('#manual-modal').classList.contains('hidden'),
-      inputConnected: i.isConnected, disabled: i.disabled, readOnly: i.readOnly,
-      active: document.activeElement && document.activeElement.id,
-      topAtInputCenter: top ? (top.id || top.className || top.tagName) : null,
-      topIsInput: top === i,
-      visibleModals: [...document.querySelectorAll('.modal:not(.hidden)')].map(x => x.id),
-    }));
-  }));
 }
 
 function closeManualModal() {
