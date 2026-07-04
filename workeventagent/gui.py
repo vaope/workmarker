@@ -21,6 +21,13 @@ from pathlib import Path
 
 from workeventagent.ids import make_event_id, make_stable_id, make_unique_stable_id
 from workeventagent.index_store import init_db, rebuild_index
+from workeventagent.inbox_store import (
+    archive_capture,
+    cancel_capture,
+    create_capture,
+    list_captures,
+    update_capture,
+)
 from workeventagent.markdown_store import ProjectDocument, write_project_atomically
 from workeventagent.models import ArchiveProposal, TargetRef, TimelineEvent
 from workeventagent.opencode_runner import (
@@ -75,6 +82,11 @@ def _main_impl() -> None:
         "update_item": handle_update_item,
         "update_task": handle_update_task,
         "generate_report": handle_generate_report,
+        "inbox_create": handle_inbox_create,
+        "inbox_list": handle_inbox_list,
+        "inbox_process": handle_inbox_process,
+        "inbox_commit": handle_inbox_commit,
+        "inbox_cancel": handle_inbox_cancel,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -779,6 +791,124 @@ def handle_generate_report(request: dict) -> dict:
         "skipped": False,
         "skip_reason": "",
     }
+
+
+# ── inbox commands ────────────────────────────────────────
+
+def handle_inbox_create(request: dict) -> dict:
+    card = create_capture(
+        Path(request["workspace"]),
+        str(request["text"]),
+        request.get("attachments", []),
+    )
+    return {"ok": True, "card": card}
+
+
+def handle_inbox_list(request: dict) -> dict:
+    return {"ok": True, "cards": list_captures(Path(request["workspace"]))}
+
+
+def handle_inbox_cancel(request: dict) -> dict:
+    card = cancel_capture(Path(request["workspace"]), request["capture_id"])
+    return {"ok": True, "card": card}
+
+
+def handle_inbox_process(request: dict) -> dict:
+    workspace = Path(request["workspace"])
+    capture_id = request["capture_id"]
+    cards = list_captures(workspace)
+    card = next((c for c in cards if c["capture_id"] == capture_id), None)
+    if card is None:
+        return {"ok": False, "kind": "not_found", "error": "capture not found"}
+
+    try:
+        result = handle_route_propose({
+            "workspace": str(workspace),
+            "text": card["text"],
+            "attachments": _inbox_attachment_paths(workspace, card),
+        })
+    except Exception as exc:
+        update_capture(workspace, capture_id, {"state": "error", "error": str(exc)})
+        return {"ok": False, "kind": "opencode_error", "error": str(exc)}
+
+    if result.get("ok"):
+        patch = {
+            "state": "needs_confirmation",
+            "proposal": result.get("proposal", result),
+            "selected_project": result.get("selected_project"),
+        }
+        if result.get("low_confidence"):
+            patch["low_confidence"] = True
+        updated = update_capture(workspace, capture_id, patch)
+        return {"ok": True, "card": updated}
+    else:
+        update_capture(workspace, capture_id, {"state": "error", "error": result.get("error", "route_propose failed")})
+        return {"ok": False, "kind": result.get("kind", "internal_error"), "error": result.get("error", "route_propose failed")}
+
+
+def handle_inbox_commit(request: dict) -> dict:
+    workspace = Path(request["workspace"])
+    capture_id = request["capture_id"]
+    cards = list_captures(workspace)
+    card = next((c for c in cards if c["capture_id"] == capture_id), None)
+    if card is None:
+        return {"ok": False, "kind": "not_found", "error": "capture not found"}
+
+    proposal = card.get("proposal", {})
+    if not proposal:
+        return {"ok": False, "kind": "no_proposal", "error": "card has no proposal to commit"}
+
+    edits = request.get("edits", {})
+    if edits:
+        event = proposal.get("event", {})
+        for k in ("summary", "status", "next_action", "task_id"):
+            if k in edits:
+                event[k] = edits[k]
+        proposal["event"] = event
+
+    selected = card.get("selected_project", {})
+    project_path = selected.get("path", "")
+    if not project_path:
+        return {"ok": False, "kind": "no_project", "error": "card has no selected project"}
+
+    try:
+        result = handle_commit({
+            "proposal": proposal,
+            "project_path": project_path,
+            "db_path": str(workspace / "index.sqlite"),
+            "pending_attachments": _inbox_attachment_paths(workspace, card),
+        })
+    except Exception as exc:
+        update_capture(workspace, capture_id, {"state": "error", "error": str(exc)})
+        return {"ok": False, "kind": "commit_error", "error": str(exc)}
+
+    if result.get("ok"):
+        archived_event_id = ""
+        # Extract event_id from commit result if available
+        if isinstance(result.get("event"), dict):
+            archived_event_id = result["event"].get("event_id", "")
+        archive_capture(workspace, capture_id, {
+            "project_path": project_path,
+            "event_id": archived_event_id,
+        })
+        return {"ok": True, "card": list_captures(workspace)[-1] if list_captures(workspace) else {}}
+    else:
+        update_capture(workspace, capture_id, {"state": "error", "error": result.get("error", "commit failed")})
+        return {"ok": False, "kind": result.get("kind", "commit_error"), "error": result.get("error", "commit failed")}
+
+
+def _inbox_attachment_paths(workspace: Path, card: dict) -> list[dict]:
+    attachments = card.get("attachments", [])
+    if not attachments:
+        return []
+    pending = workspace / ".workeventagent" / "pending" / card["capture_id"]
+    result: list[dict] = []
+    for att in attachments:
+        safe = att.get("safe_filename", att.get("filename", ""))
+        p = pending / safe
+        if p.exists():
+            result.append({"temp_path": str(p), "filename": att.get("filename", safe)})
+    return result
 
 
 # ── init ─────────────────────────────────────────────────

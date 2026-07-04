@@ -28,6 +28,11 @@ from workeventagent.gui import (
     handle_timeline,
     handle_init,
     handle_generate_report,
+    handle_inbox_create,
+    handle_inbox_list,
+    handle_inbox_process,
+    handle_inbox_commit,
+    handle_inbox_cancel,
 )
 from workeventagent.markdown_store import write_project_atomically
 from workeventagent.index_store import get_task, init_db, rebuild_index
@@ -1826,6 +1831,132 @@ class ReportPathSafetyTests(unittest.TestCase):
         p = _report_output_path(ws, "project_summary", "2026-01-01", "2026-01-01",
                                 project_id="my-project", range_label="")
         self.assertIn("my-project", p.name)
+
+
+class InboxHandlerTests(unittest.TestCase):
+    """Tests for inbox_create, inbox_list, inbox_process, inbox_commit, inbox_cancel."""
+
+    def test_inbox_create_and_list_returns_processing_card(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            result = handle_inbox_create({
+                "workspace": str(ws),
+                "text": "mapped the cache blocker",
+                "attachments": [],
+            })
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["card"]["state"], "processing")
+
+            listed = handle_inbox_list({"workspace": str(ws)})
+            self.assertTrue(listed["ok"])
+            self.assertEqual(listed["cards"][0]["capture_id"], result["card"]["capture_id"])
+
+    def test_inbox_cancel_cleans_pending_attachment(self):
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            src = ws / "clip.png"
+            src.write_bytes(b"image")
+            created = handle_inbox_create({
+                "workspace": str(ws),
+                "text": "cancel this",
+                "attachments": [{"temp_path": str(src), "filename": "clip.png"}],
+            })
+
+            canceled = handle_inbox_cancel({
+                "workspace": str(ws),
+                "capture_id": created["card"]["capture_id"],
+            })
+
+            self.assertTrue(canceled["ok"])
+            self.assertEqual(canceled["card"]["state"], "canceled")
+            self.assertFalse((ws / ".workeventagent" / "pending" / created["card"]["capture_id"]).exists())
+
+    @patch("workeventagent.gui.run_project_router")
+    @patch("workeventagent.gui.run_archivist")
+    def test_inbox_process_no_router(self, run_archivist, run_project_router):
+        run_archivist.return_value = """```json
+{
+  "target": {"project_id": "test-proj", "item_id": "item-a", "task_id": "task-1"},
+  "confidence": 0.95,
+  "reason": "single project match",
+  "event": {"task_id": "task-1", "input_text": "mapped the cache blocker", "summary": "Mapped cache blockers", "status": "in_progress", "next_action": "Continue mapping"}
+}
+```"""
+
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            # Create a project so scan_workspace finds one
+            from workeventagent.gui import handle_init
+            handle_init({
+                "workspace": str(ws),
+                "title": "Test Project",
+                "project_id": "test-proj",
+                "items": [{"title": "Item A", "tasks": ["Task 1"]}],
+                "db_path": str(ws / "index.sqlite"),
+            })
+
+            created = handle_inbox_create({
+                "workspace": str(ws),
+                "text": "mapped the cache blocker",
+                "attachments": [],
+            })
+
+            result = handle_inbox_process({
+                "workspace": str(ws),
+                "capture_id": created["card"]["capture_id"],
+            })
+
+            self.assertTrue(result["ok"], str(result))
+            self.assertEqual(result["card"]["state"], "needs_confirmation")
+            run_project_router.assert_not_called()  # single project skips router
+            run_archivist.assert_called_once()
+
+    @patch("workeventagent.gui.run_archivist")
+    @patch("workeventagent.gui.run_project_router")
+    def test_inbox_commit_from_confirmed_card(self, run_project_router, run_archivist):
+        # Set up archivist to return a valid proposal
+        run_archivist.return_value = """```json
+{
+  "target": {"project_id": "test-proj", "item_id": "item-a", "task_id": "task-1"},
+  "confidence": 0.95,
+  "reason": "single project match",
+  "event": {"task_id": "task-1", "input_text": "mapped the cache blocker", "summary": "Mapped cache blockers", "status": "in_progress", "next_action": "Continue mapping"}
+}
+```"""
+
+        with tempfile.TemporaryDirectory() as d:
+            ws = Path(d)
+            from workeventagent.gui import handle_init
+            handle_init({
+                "workspace": str(ws),
+                "title": "Test Project",
+                "project_id": "test-proj",
+                "items": [{"title": "Item A", "tasks": ["Task 1"]}],
+                "db_path": str(ws / "index.sqlite"),
+            })
+
+            created = handle_inbox_create({
+                "workspace": str(ws),
+                "text": "mapped the cache blocker",
+                "attachments": [],
+            })
+
+            # Process to get proposal
+            processed = handle_inbox_process({
+                "workspace": str(ws),
+                "capture_id": created["card"]["capture_id"],
+            })
+            self.assertTrue(processed["ok"], str(processed))
+
+            result = handle_inbox_commit({
+                "workspace": str(ws),
+                "capture_id": created["card"]["capture_id"],
+            })
+
+            self.assertTrue(result["ok"], str(result))
+            pending_dir = ws / ".workeventagent" / "pending" / created["card"]["capture_id"]
+            self.assertFalse(pending_dir.exists())
 
 
 if __name__ == "__main__":
