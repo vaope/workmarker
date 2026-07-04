@@ -69,6 +69,29 @@ Use:
 
 Writes must be atomic. Keep the latest archived cards for a bounded count such as 100 cards to avoid unbounded growth. Never delete `processing`, `needs_confirmation`, or `error` cards automatically.
 
+Retention rule: archived cards may be trimmed only after the project write has been confirmed and the card contains enough target pointers to recover the real record through Search. Unconfirmed, failed, or pending cards are durable until the user retries, cancels, or confirms them.
+
+### Migration From Current Quick Capture
+
+The current quick capture implementation is a single-slot state machine: one renderer `state.proposal`, one visible confirmation surface, and phase transitions driven by `setCaptureState()`. F003 must replace that authoritative single slot with inbox-backed cards, not add a second competing capture system.
+
+Migration rules:
+
+- The inbox store is the source of truth for capture lifecycle state.
+- Quick capture submit creates a card first, then starts route/propose for that card.
+- Route/propose updates the card from `processing` to `needs_confirmation` or `error`; it must not store the proposal only in renderer-local state.
+- Commit/archive accepts a `capture_id` and the proposal version currently stored on that card.
+- The main Inbox and quick capture compact list both render from the same card store.
+- `setCaptureState()` may remain as a view helper during migration, but it cannot own proposal data or determine whether a capture still exists.
+- Capture confirmation UI must be rendered per card. Do not keep using a shared single confirmation element as the authoritative proposal surface.
+
+Migration acceptance cases:
+
+- Submit two quick captures back-to-back; both cards remain visible and independently confirmable.
+- Confirming the second card before the first does not overwrite the first proposal.
+- Closing and reopening quick capture reloads active cards from `inbox.json`.
+- An old single-slot proposal cannot survive as hidden renderer state after the corresponding inbox card is archived, canceled, or retried.
+
 ### UI
 
 Main window:
@@ -185,6 +208,47 @@ Cross-project correction writes:
 - a new Timeline event in the target project with the corrected target
 - Work Map updates in both affected projects when a status or next_action changed current state
 
+### Cross-Project Atomicity Protocol
+
+There is no true single transaction across two Markdown files. Cross-project correction must therefore use an explicit intent journal and a write order that never leaves a source event pointing at a missing target event.
+
+Use:
+
+```text
+<workspace>/.workeventagent/corrections/<correction_id>.json
+```
+
+The journal records:
+
+- correction_id
+- source project path, item_id, task_id, and original event_id
+- target project path, item_id, and task_id
+- corrected summary/status/next_action
+- deterministic target_event_id
+- stage: `intent`, `target_written`, `source_written`, or `done`
+- last_error if recovery is needed
+
+Write order:
+
+1. Validate source and target anchors still exist.
+2. Write the journal at `intent`.
+3. Append the target project event first, including `correction_id`, `source_event_id`, and source project metadata. If the deterministic `target_event_id` already exists, treat this step as complete.
+4. Atomically write the target project file, including any target Work Map state change, then rebuild affected indexes.
+5. Update the journal to `target_written`.
+6. Append the source correction event referencing the already-written target event, including any source Work Map state change.
+7. Atomically write the source project file, then rebuild affected indexes.
+8. Update the journal to `source_written`.
+9. Verify both source and target events exist, then mark the journal `done`.
+
+Recovery rules:
+
+- On startup and before new corrections, scan unfinished journals.
+- `intent` with no target event can be retried or canceled before any project file points elsewhere.
+- `target_written` is recoverable by completing the source correction event, or by detecting that the source event already exists after a crash between the source file write and journal update; it must be displayed as a pending correction, not hidden.
+- `source_written` with a stale journal is finalized by verifying both events exist and marking `done`.
+- Retrying must be idempotent through `correction_id` and deterministic event IDs, so a crash cannot create duplicate target events.
+- A source correction event must never be written before the target event exists.
+
 ### Safety Rule
 
 If the system cannot reconstruct the previous Work Map state for the original task, the correction UI must show an explicit "original task current state" field for the user to confirm. Do not silently guess a rollback.
@@ -208,7 +272,8 @@ Correction modal:
 
 - Correcting an event appends a correction event; original event remains unchanged.
 - Same-project reassignment updates the target task and leaves an auditable correction trail.
-- Cross-project reassignment writes to both source and target projects atomically enough that partial failure is visible and recoverable.
+- Cross-project reassignment uses the correction journal and target-first write order; crash tests must prove no source event can reference a missing target event.
+- If a crash occurs after the target write but before the source write, the pending correction is visible and can be resumed without duplicate target events.
 - Work Map changes are scoped to affected tasks only.
 - Correction is confirmed by the user before any write.
 - Search and Timeline views show that an event was corrected.
@@ -232,4 +297,3 @@ Rationale: Inbox creates the stable queue that corrections and search can point 
 - No automatic correction without user confirmation.
 - No editing stable IDs.
 - No background OS service.
-
