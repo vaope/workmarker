@@ -1312,7 +1312,7 @@ function showRecoveryBanner(pending) {
     const btn = document.createElement('button');
     btn.className = 'resume-btn';
     btn.textContent = '恢复';
-    btn.addEventListener('click', () => resumePendingCorrection(p.correction_id));
+    btn.addEventListener('click', (e) => resumePendingCorrection(p.correction_id, e.currentTarget));
     actions.appendChild(btn);
   });
 
@@ -1326,8 +1326,7 @@ function hideRecoveryBanner() {
   if (actions) actions.innerHTML = '';
 }
 
-async function resumePendingCorrection(correctionId) {
-  const btn = document.querySelector(`#recovery-actions button.resume-btn`);
+async function resumePendingCorrection(correctionId, btn) {
   if (btn) { btn.disabled = true; btn.textContent = '恢复中…'; }
 
   try {
