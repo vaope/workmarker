@@ -67,9 +67,11 @@ Use:
 <workspace>/.workeventagent/pending/<capture_id>/<filename>
 ```
 
-Writes must be atomic. Keep the latest archived cards for a bounded count such as 100 cards to avoid unbounded growth. Never delete `processing`, `needs_confirmation`, or `error` cards automatically.
+Writes must be atomic. Keep the latest archived and canceled card records for a bounded count such as 100 cards to avoid unbounded growth. Never delete `processing`, `needs_confirmation`, or `error` cards automatically.
 
 Retention rule: archived cards may be trimmed only after the project write has been confirmed and the card contains enough target pointers to recover the real record through Search. Unconfirmed, failed, or pending cards are durable until the user retries, cancels, or confirms them.
+
+Pending attachment cleanup rule: after commit succeeds, move the files from `<workspace>/.workeventagent/pending/<capture_id>/` into the target project attachment folder and delete the pending directory. After cancel succeeds, delete the pending directory. Retention trims card records only; it must not leave orphaned pending attachment folders.
 
 ### Migration From Current Quick Capture
 
@@ -83,6 +85,7 @@ Migration rules:
 - Commit/archive accepts a `capture_id` and the proposal version currently stored on that card.
 - The main Inbox and quick capture compact list both render from the same card store.
 - `setCaptureState()` may remain as a view helper during migration, but it cannot own proposal data or determine whether a capture still exists.
+- During migration, `setCaptureState()` may only drive confirmation surface visibility and layout. It must not cache proposal fields; per-card rendering reads the current proposal directly from the inbox store every time.
 - Capture confirmation UI must be rendered per card. Do not keep using a shared single confirmation element as the authoritative proposal surface.
 
 Migration acceptance cases:
@@ -225,6 +228,7 @@ The journal records:
 - target project path, item_id, and task_id
 - corrected summary/status/next_action
 - deterministic target_event_id
+- deterministic source_correction_event_id
 - stage: `intent`, `target_written`, `source_written`, or `done`
 - last_error if recovery is needed
 
@@ -235,7 +239,7 @@ Write order:
 3. Append the target project event first, including `correction_id`, `source_event_id`, and source project metadata. If the deterministic `target_event_id` already exists, treat this step as complete.
 4. Atomically write the target project file, including any target Work Map state change, then rebuild affected indexes.
 5. Update the journal to `target_written`.
-6. Append the source correction event referencing the already-written target event, including any source Work Map state change.
+6. Append the source correction event with `source_correction_event_id`, referencing the already-written target event, including any source Work Map state change. If the deterministic `source_correction_event_id` already exists, treat this step as complete.
 7. Atomically write the source project file, then rebuild affected indexes.
 8. Update the journal to `source_written`.
 9. Verify both source and target events exist, then mark the journal `done`.
@@ -244,6 +248,7 @@ Recovery rules:
 
 - On startup and before new corrections, scan unfinished journals.
 - `intent` with no target event can be retried or canceled before any project file points elsewhere.
+- `intent` with an already-written target event is recovered by treating the target step as complete and advancing the journal to `target_written`.
 - `target_written` is recoverable by completing the source correction event, or by detecting that the source event already exists after a crash between the source file write and journal update; it must be displayed as a pending correction, not hidden.
 - `source_written` with a stale journal is finalized by verifying both events exist and marking `done`.
 - Retrying must be idempotent through `correction_id` and deterministic event IDs, so a crash cannot create duplicate target events.
@@ -273,6 +278,7 @@ Correction modal:
 - Correcting an event appends a correction event; original event remains unchanged.
 - Same-project reassignment updates the target task and leaves an auditable correction trail.
 - Cross-project reassignment uses the correction journal and target-first write order; crash tests must prove no source event can reference a missing target event.
+- Crash tests must cover `intent` with no target event, `intent` with target event already written, `target_written` with no source event, and `target_written` with source event already written.
 - If a crash occurs after the target write but before the source write, the pending correction is visible and can be resumed without duplicate target events.
 - Work Map changes are scoped to affected tasks only.
 - Correction is confirmed by the user before any write.
