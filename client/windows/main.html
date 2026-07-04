@@ -36,6 +36,14 @@
 
     <!-- 右栏：工作视图 -->
     <main class="content">
+      <!-- 纠错恢复横幅（有未完成的跨项目纠错时显示） -->
+      <div id="recovery-banner" class="recovery-banner hidden">
+        <span class="recovery-icon">⚠️</span>
+        <span id="recovery-text" class="recovery-text"></span>
+        <span id="recovery-actions" class="recovery-actions"></span>
+        <button id="recovery-dismiss" class="recovery-dismiss" title="忽略">×</button>
+      </div>
+
       <header class="content-head">
         <div class="head-left">
           <div class="tabs">

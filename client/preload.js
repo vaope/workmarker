@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld('wea', {
 
   // --- correction ---
   correctEvent: (request) => ipcRenderer.invoke('wea:correctEvent', request || {}),
+  correctionRecoveries: () => ipcRenderer.invoke('wea:correctionRecoveries'),
+  resumeCorrection: (correctionId) => ipcRenderer.invoke('wea:resumeCorrection', { correctionId }),
 
   // --- clipboard / attachments ---
   readClipboardImage: () => ipcRenderer.invoke('wea:readClipboardImage'),

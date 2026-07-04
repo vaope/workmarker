@@ -71,7 +71,7 @@ def correct_event_same_project(
         return {"ok": False, "kind": "not_found", "error": f"task {target_task_id} not found in Work Map"}
 
     now = datetime.now(timezone.utc)
-    correction_event_id = now.strftime("%Y%m%d-%H%M%S") + "-correction"
+    correction_event_id = make_event_id(now, "correction", set())
 
     # Build correction event string
     correction_lines = [
@@ -295,14 +295,14 @@ def correct_event_cross_project(
 
     now = datetime.now(timezone.utc)
     timestamp = now.strftime("%Y-%m-%dT%H:%M:%S+00:00")
-    ts_compact = now.strftime("%Y%m%d-%H%M%S")
-    correction_id = f"corr-{ts_compact}-{original_event_id}"
+    correction_id = make_event_id(now, f"corr-{original_event_id}", set())
 
     source_project_id = _extract_project_id(source_text)
-    target_event_id = f"corr-{ts_compact}-{target_task_id}"
-    source_correction_event_id = f"corr-{ts_compact}-{source_task_id}-correction"
+    target_event_id = make_event_id(now, f"move-{target_task_id}", set())
+    source_correction_event_id = make_event_id(now, f"fix-{source_task_id}", set())
 
-    workspace = source_path.parent if source_path.parent == target_path.parent else source_path.parent
+    # MVP: same-workspace assumption — both source and target are flat files under the same workspace
+    workspace = source_path.parent
     journal_dir = _corrections_dir(workspace)
 
     # ── Step 1: Write intent journal ──
@@ -313,6 +313,7 @@ def correct_event_cross_project(
         "source_task_id": source_task_id,
         "original_event_id": original_event_id,
         "target_project_path": str(target_path),
+        # target_item_id is not resolved cross-project; recovery uses task_id+event_id only
         "target_item_id": "",
         "target_task_id": target_task_id,
         "summary": summary,

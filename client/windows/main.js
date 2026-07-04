@@ -28,6 +28,8 @@ async function boot() {
   }
   wea.onArchived(() => { if (state.currentProject) refreshCurrent(); });
   loadReportSchedule();
+  // Check for unfinished cross-project corrections on startup
+  if (state.config.workspace) checkPendingCorrections();
 }
 
 function enterSetup() {
@@ -118,6 +120,9 @@ function bindStaticHandlers() {
   $('#report-save-schedule').addEventListener('click', saveReportSchedule);
   $('#report-date-from').value = todayStr();
   $('#report-date-to').value = todayStr();
+
+  // recovery banner dismiss (bound once; handler reads dynamic state)
+  $('#recovery-dismiss').addEventListener('click', hideRecoveryBanner);
 }
 
 // ---- projects ------------------------------------------------------------
@@ -1275,6 +1280,76 @@ async function submitCorrection() {
     $('#corr-error').classList.remove('hidden');
   } finally {
     $('#corr-submit').disabled = false;
+  }
+}
+
+// ---- recovery banner ----------------------------------------------------
+
+async function checkPendingCorrections() {
+  try {
+    const res = await wea.correctionRecoveries();
+    if (!res || !res.ok || !res.pending || !res.pending.length) return;
+    showRecoveryBanner(res.pending);
+  } catch (_) { /* recovery check is best-effort on boot */ }
+}
+
+function showRecoveryBanner(pending) {
+  const banner = $('#recovery-banner');
+  if (!banner) return;
+
+  const count = pending.length;
+  const first = pending[0];
+  const sourceProj = (first.source_project_path || '').split(/[\\/]/).pop().replace(/\.md$/, '') || '?';
+  const targetProj = (first.target_project_path || '').split(/[\\/]/).pop().replace(/\.md$/, '') || '?';
+
+  $('#recovery-text').textContent =
+    count === 1
+      ? `有 1 条未完成的跨项目纠错：${sourceProj} → ${targetProj}`
+      : `有 ${count} 条未完成的跨项目纠错`;
+
+  const actions = $('#recovery-actions');
+  pending.forEach((p) => {
+    const btn = document.createElement('button');
+    btn.className = 'resume-btn';
+    btn.textContent = '恢复';
+    btn.addEventListener('click', () => resumePendingCorrection(p.correction_id));
+    actions.appendChild(btn);
+  });
+
+  banner.classList.remove('hidden');
+}
+
+function hideRecoveryBanner() {
+  const banner = $('#recovery-banner');
+  if (banner) banner.classList.add('hidden');
+  const actions = $('#recovery-actions');
+  if (actions) actions.innerHTML = '';
+}
+
+async function resumePendingCorrection(correctionId) {
+  const btn = document.querySelector(`#recovery-actions button.resume-btn`);
+  if (btn) { btn.disabled = true; btn.textContent = '恢复中…'; }
+
+  try {
+    const res = await wea.resumeCorrection(correctionId);
+    if (!res || !res.ok) {
+      toast(`恢复失败：${(res && res.error) || '后端错误'}`, 'err');
+      if (btn) { btn.disabled = false; btn.textContent = '重试'; }
+      return;
+    }
+    toast('纠错已恢复', 'ok');
+    // Re-check: if no more pending, hide banner; otherwise refresh list
+    const check = await wea.correctionRecoveries();
+    if (!check || !check.ok || !check.pending || !check.pending.length) {
+      hideRecoveryBanner();
+    } else {
+      $('#recovery-actions').innerHTML = '';
+      showRecoveryBanner(check.pending);
+    }
+    if (state.currentProject) await refreshCurrent();
+  } catch (err) {
+    toast(`恢复出错：${err.message || err}`, 'err');
+    if (btn) { btn.disabled = false; btn.textContent = '重试'; }
   }
 }
 

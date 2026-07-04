@@ -232,3 +232,38 @@ def test_cross_project_target_written_with_source_already_written_marks_done(tmp
     assert journal["stage"] == "done"
     assert source_text.count("corr-source-event") == 1
     assert target_text.count("corr-target-event") == 1
+
+
+# ── integration: handler chain (crash → visible → resume → cleared) ──────
+
+
+def test_handler_chain_crash_recovery_visible_and_resumable(tmp_path: Path) -> None:
+    """Integration: after simulated crash, recoveries handler returns pending,
+    resume handler recovers it, and recoveries returns empty thereafter."""
+    from workeventagent.gui import handle_correction_recoveries, handle_resume_correction
+
+    fixture = _write_cross_project_fixture(
+        tmp_path, "target_written", target_written=True, source_written=False,
+    )
+    db = tmp_path / "index.sqlite"
+
+    # 1. After crash, pending corrections are visible
+    recoveries_res = handle_correction_recoveries({"workspace": str(tmp_path)})
+    assert recoveries_res["ok"] is True
+    assert len(recoveries_res["pending"]) == 1
+    assert recoveries_res["pending"][0]["correction_id"] == "corr-1"
+    assert recoveries_res["pending"][0]["stage"] == "target_written"
+
+    # 2. Resume recovers the correction
+    resume_res = handle_resume_correction({
+        "workspace": str(tmp_path),
+        "correction_id": "corr-1",
+        "db_path": str(db),
+    })
+    assert resume_res["ok"] is True, f"resume failed: {resume_res}"
+    assert "corr-source-event" in fixture["source"].read_text(encoding="utf-8")
+
+    # 3. After recovery, no more pending
+    recoveries_res2 = handle_correction_recoveries({"workspace": str(tmp_path)})
+    assert recoveries_res2["ok"] is True
+    assert len(recoveries_res2["pending"]) == 0

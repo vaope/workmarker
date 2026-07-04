@@ -320,6 +320,18 @@ function attachIpc() {
     return callBackend('correct_event', { ...request, db_path: dbPathFor(c.workspace) }, c.pythonCmd);
   });
 
+  ipcMain.handle('wea:correctionRecoveries', async () => {
+    const c = cfg();
+    if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
+    return callBackend('correction_recoveries', { workspace: c.workspace }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:resumeCorrection', async (_e, { correctionId }) => {
+    const c = cfg();
+    if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
+    return callBackend('resume_correction', { workspace: c.workspace, correction_id: correctionId, db_path: dbPathFor(c.workspace) }, c.pythonCmd);
+  });
+
   ipcMain.handle('wea:readClipboardImage', async () => {
     const img = clipboard.readImage();
     if (img.isEmpty()) return null;
