@@ -286,12 +286,14 @@ Correction modal:
 
 ## Recommended Implementation Order
 
-1. Capture Inbox data model and main-window Inbox view.
-2. Wire quick capture to create inbox cards and allow later confirmation.
-3. Deterministic global search over projects, tasks, timeline, reports, and item backgrounds.
-4. Search result navigation and optional AI summary of selected results.
-5. Same-project correction workflow.
-6. Cross-project correction workflow.
+1. ~~Capture Inbox data model and main-window Inbox view.~~ ✅
+2. ~~Wire quick capture to create inbox cards and allow later confirmation.~~ ✅
+3. ~~Deterministic global search over projects, tasks, timeline, reports, and item backgrounds.~~ ✅
+4. ~~Search result navigation and optional AI summary of selected results.~~ ✅
+5. ~~Same-project correction workflow.~~ ✅
+6. ~~Cross-project correction workflow (target-first + intent journal + crash recovery).~~ ✅
+
+Implemented 2026-07-04, commits `5bbfce8` through `2f01c1b`.
 
 Rationale: Inbox creates the stable queue that corrections and search can point to. Search makes archived content useful. Correction completes the trust loop after retrieval exposes wrong archives.
 
