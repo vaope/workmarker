@@ -29,6 +29,7 @@ from workeventagent.inbox_store import (
     update_capture,
 )
 from workeventagent.search_store import search_workspace
+from workeventagent.correction_store import correct_event_same_project
 from workeventagent.markdown_store import ProjectDocument, write_project_atomically
 from workeventagent.models import ArchiveProposal, TargetRef, TimelineEvent
 from workeventagent.opencode_runner import (
@@ -89,6 +90,7 @@ def _main_impl() -> None:
         "inbox_commit": handle_inbox_commit,
         "inbox_cancel": handle_inbox_cancel,
         "search": handle_search,
+        "correct_event": handle_correct_event,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -921,6 +923,14 @@ def handle_search(request: dict) -> dict:
         return {"ok": False, "kind": "invalid_input", "error": "query is required"}
     results = search_workspace(Path(request["workspace"]), query, int(request.get("limit", 50)))
     return {"ok": True, "results": results}
+
+
+# ── correction ─────────────────────────────────────────────
+
+def handle_correct_event(request: dict) -> dict:
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    return correct_event_same_project(project_path, db_path, request)
 
 
 # ── init ─────────────────────────────────────────────────
