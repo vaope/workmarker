@@ -8,6 +8,7 @@ const state = {
   pending: [],
   cards: [],           // active inbox cards (needs_confirmation, processing, error)
   selectedCardId: '',  // which card's confirm view is showing
+  processingCardId: '',
   busy: false,
   phase: 'input',      // 'input' | 'confirm' | 'processing' | 'error' — drives visibility/layout only
   lastText: '',
@@ -170,7 +171,9 @@ async function submit() {
   }
 
   // Trigger backend processing (routing + archivist)
-  const processed = await wea.processCapture(created.card.capture_id);
+  state.processingCardId = created.card.capture_id;
+  processCaptureInBackground(created.card.capture_id);
+  const processed = { ok: true };
   if (!processed || !processed.ok) {
     setCaptureState('error', {
       message: (processed && processed.error) || '解析失败',
@@ -190,6 +193,22 @@ async function submit() {
   $('#cap-submit').textContent = '提交';
   await reloadCards();
   resize();
+}
+
+function processCaptureInBackground(captureId) {
+  wea.processCapture(captureId).then((processed) => {
+    if (!processed || !processed.ok) {
+      setStatus((processed && processed.error) || 'Capture processing failed.', 'error');
+    }
+  }).catch((err) => {
+    setStatus(`Capture processing failed: ${err.message || err}`, 'error');
+  }).finally(async () => {
+    await reloadCards();
+    if (state.phase === 'processing' && state.processingCardId === captureId) {
+      state.processingCardId = '';
+      setCaptureState('input', { status: 'Capture is ready in the list.' });
+    }
+  });
 }
 
 function renderProcessing(text) {

@@ -520,3 +520,156 @@ def test_quick_capture_returns_to_input_after_successful_commit() -> None:
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_quick_capture_allows_next_input_while_previous_card_processing() -> None:
+    script = textwrap.dedent(
+        r"""
+        const fs = require('fs');
+        const vm = require('vm');
+
+        class ClassList {
+          constructor(classes = []) { this.classes = new Set(classes); }
+          add(name) { this.classes.add(name); }
+          remove(name) { this.classes.delete(name); }
+          contains(name) { return this.classes.has(name); }
+          toggle(name, force) {
+            if (force === undefined) {
+              if (this.classes.has(name)) this.classes.delete(name);
+              else this.classes.add(name);
+              return this.classes.has(name);
+            }
+            if (force) this.classes.add(name);
+            else this.classes.delete(name);
+            return force;
+          }
+        }
+
+        class Element {
+          constructor(id, classes = []) {
+            this.id = id;
+            this.classList = new ClassList(classes);
+            this.value = '';
+            this.textContent = '';
+            this.disabled = false;
+            this.listeners = {};
+            this.scrollHeight = 260;
+            this.children = [];
+            this._innerHTML = '';
+          }
+          set innerHTML(value) {
+            this._innerHTML = String(value);
+            for (const match of this._innerHTML.matchAll(/id="([^"]+)"/g)) {
+              if (!elements[match[1]]) elements[match[1]] = new Element(match[1]);
+            }
+          }
+          get innerHTML() { return this._innerHTML; }
+          addEventListener(name, cb) { this.listeners[name] = cb; }
+          appendChild(child) { this.children.push(child); }
+          querySelector(sel) { return null; }
+          querySelectorAll(sel) { return []; }
+          focus() {}
+        }
+
+        const elements = {
+          'cap-input': new Element('cap-input'),
+          'cap-submit': new Element('cap-submit'),
+          'cap-cancel': new Element('cap-cancel'),
+          'cap-status': new Element('cap-status'),
+          'cap-recent': new Element('cap-recent'),
+          'cap-confirm': new Element('cap-confirm', ['hidden']),
+          'cap-card-list': new Element('cap-card-list'),
+          'cap-input-area': new Element('cap-input-area'),
+          'cap-thumbs': new Element('cap-thumbs', ['hidden']),
+          'cap-foot': new Element('cap-foot', ['cap-foot']),
+          'cap': new Element('cap', ['cap']),
+        };
+
+        const document = {
+          querySelector(selector) {
+            if (selector.startsWith('#')) return elements[selector.slice(1)] || null;
+            if (selector === '.cap-foot') return elements['cap-foot'];
+            if (selector === '.cap') return elements['cap'];
+            return null;
+          },
+          createElement(tag) { return new Element(tag); },
+        };
+
+        let createTexts = [];
+        let processResolvers = [];
+        let cards = [];
+        function cardFor(id, text, state) {
+          return { capture_id: id, state, text };
+        }
+
+        const context = {
+          console,
+          document,
+          requestAnimationFrame: (cb) => cb(),
+          setTimeout: (cb) => cb(),
+          window: { addEventListener: () => {} },
+          wea: {
+            getConfig: async () => ({}),
+            listProjects: async () => ({ ok: true, projects: [{ project_id: 'p', title: 'Project', path: 'project.md' }] }),
+            createCapture: async (text) => {
+              createTexts.push(text);
+              const card = cardFor(`cap-${createTexts.length}`, text, 'processing');
+              cards.push(card);
+              return { ok: true, card };
+            },
+            processCapture: async (captureId) => new Promise((resolve) => {
+              processResolvers.push(() => {
+                cards = cards.map((card) => card.capture_id === captureId ? { ...card, state: 'needs_confirmation' } : card);
+                resolve({ ok: true, card: cards.find((card) => card.capture_id === captureId) });
+              });
+            }),
+            listCaptures: async () => ({ ok: true, cards }),
+            commitCapture: async () => ({ ok: true }),
+            cancelCapture: async () => ({ ok: true }),
+            onShowCapture: () => {},
+            onArchived: () => {},
+            onInboxUpdated: () => {},
+            resizeCapture: () => {},
+            hideCapture: () => {},
+            discardPending: () => {},
+          },
+        };
+        context.globalThis = context;
+        vm.createContext(context);
+        vm.runInContext(fs.readFileSync('client/windows/capture.js', 'utf8'), context);
+
+        (async () => {
+          await context.boot();
+          elements['cap-input'].value = 'first capture';
+          const firstSubmit = context.submit();
+          await new Promise((resolve) => setImmediate(resolve));
+
+          elements['cap-input'].value = 'second capture';
+          await context.submit();
+          await Promise.resolve();
+
+          if (createTexts.join('|') !== 'first capture|second capture') {
+            throw new Error(`quick capture should create both cards while processing; got ${createTexts.join('|')}`);
+          }
+          if (elements['cap-submit'].disabled) {
+            throw new Error('submit button should be enabled while background processing continues');
+          }
+
+          processResolvers.forEach((resolve) => resolve());
+          await firstSubmit;
+        })().catch((err) => {
+          console.error(err && err.stack || err);
+          process.exit(1);
+        });
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "-e", script],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

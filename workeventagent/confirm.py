@@ -19,6 +19,8 @@ def render_confirmation_card(proposal: ArchiveProposal) -> str:
     lines.append("=" * 60)
     lines.append(f"  project_id:   {t.project_id}")
     lines.append(f"  item_id:      {t.item_id}")
+    if t.item_title:
+        lines.append(f"  item_title:   {t.item_title}")
     lines.append(f"  task_id:      {t.task_id}")
     if t.task_title:
         lines.append(f"  task_title:   {t.task_title}")
@@ -74,6 +76,7 @@ def edit_proposal_with_editor(
         "target": {
             "project_id": proposal.target.project_id,
             "item_id": proposal.target.item_id,
+            "item_title": proposal.target.item_title,
             "task_id": proposal.target.task_id,
             "task_title": proposal.target.task_title,
             "new_item": proposal.target.new_item,
@@ -112,6 +115,7 @@ def edit_proposal_with_editor(
             item_id=t["item_id"],
             task_id=t["task_id"],
             task_title=t.get("task_title", ""),
+            item_title=t.get("item_title", ""),
             new_item=t.get("new_item", False),
             new_task=t.get("new_task", False),
         ),
@@ -138,6 +142,9 @@ def _render_markdown_preview(proposal: ArchiveProposal) -> str:
     lines: list[str] = []
 
     if t.new_task:
+        if t.new_item:
+            item_title = t.item_title or t.item_id
+            lines.append(f"### Item: {item_title} <!-- item:{t.item_id} -->")
         lines.append(f"#### Task: {t.task_title} <!-- task:{t.task_id} -->")
         lines.append(f"- status: {e.status}")
         lines.append(f"- next_action: {e.next_action}")

@@ -156,6 +156,7 @@ def handle_propose(request: dict) -> dict:
             "target": {
                 "project_id": proposal.target.project_id,
                 "item_id": proposal.target.item_id,
+                "item_title": proposal.target.item_title,
                 "task_id": proposal.target.task_id,
                 "task_title": proposal.target.task_title,
                 "new_item": proposal.target.new_item,
@@ -1473,6 +1474,7 @@ def _parse_timeline_events(text: str) -> list[dict]:
     events: list[dict] = []
     in_timeline = False
     current_event: dict | None = None
+    current_key: str | None = None
     # Track parentages: event lines start with "- ", sub-items with "  - "
     _event_line_re = re.compile(r"^- (\S+)\s*<!--\s*event:(.+?)\s*-->")
     _sub_kv_re = re.compile(r"^  - ([a-z_]+):\s*(.*)")
@@ -1486,6 +1488,7 @@ def _parse_timeline_events(text: str) -> list[dict]:
             if current_event:
                 events.append(current_event)
                 current_event = None
+                current_key = None
             break
 
         if in_timeline:
@@ -1497,12 +1500,19 @@ def _parse_timeline_events(text: str) -> list[dict]:
                     "timestamp": ev_match.group(1),
                     "event_id": ev_match.group(2).strip(),
                 }
+                current_key = None
                 continue
 
             if current_event is not None:
                 kv_match = _sub_kv_re.match(line)
                 if kv_match:
-                    current_event[kv_match.group(1).strip()] = kv_match.group(2).strip()
+                    current_key = kv_match.group(1).strip()
+                    current_event[current_key] = kv_match.group(2).strip()
+                    continue
+                if current_key and line.startswith("    "):
+                    current_event[current_key] = (
+                        current_event.get(current_key, "") + "\n" + line[4:].rstrip()
+                    )
 
     if current_event:
         events.append(current_event)
@@ -1731,6 +1741,7 @@ def _dict_to_proposal(data: dict) -> ArchiveProposal:
             item_id=t.get("item_id", ""),
             task_id=t.get("task_id", ""),
             task_title=t.get("task_title", ""),
+            item_title=t.get("item_title", ""),
             new_item=t.get("new_item", False),
             new_task=t.get("new_task", False),
         ),

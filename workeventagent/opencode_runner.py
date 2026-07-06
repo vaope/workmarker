@@ -111,6 +111,7 @@ def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
             item_id=target["item_id"],
             task_id=target["task_id"],
             task_title=target.get("task_title", ""),
+            item_title=target.get("item_title", ""),
             new_item=target.get("new_item", False),
             new_task=target.get("new_task", False),
         ),

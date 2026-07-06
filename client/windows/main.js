@@ -27,6 +27,10 @@ async function boot() {
     await loadProjects();
   }
   wea.onArchived(() => { if (state.currentProject) refreshCurrent(); });
+  wea.onInboxUpdated(() => {
+    if (state.currentProject) refreshCurrent();
+    if (state.view === 'inbox') loadInbox();
+  });
   loadReportSchedule();
   // Check for unfinished cross-project corrections on startup
   if (state.config.workspace) checkPendingCorrections();

@@ -61,6 +61,8 @@ class ProjectDocument:
                 break
 
         if item_line_idx is None:
+            if proposal.target.new_item:
+                return self._insert_new_item_with_task(proposal)
             raise ValueError(f"Item anchor not found: {item_anchor}")
 
         # Find insertion point: after the item heading, before next heading
@@ -113,11 +115,11 @@ class ProjectDocument:
         event = proposal.event
         timeline_entry = (
             f"\n- {now_iso} <!-- event:{event.event_id} -->\n"
-            f"  - task_id: {event.task_id}\n"
-            f"  - input: {event.input_text}\n"
-            f"  - summary: {event.summary}\n"
-            f"  - status: {event.status}\n"
-            f"  - next_action: {event.next_action}\n"
+            f"{self._render_timeline_field('task_id', event.task_id)}"
+            f"{self._render_timeline_field('input', event.input_text)}"
+            f"{self._render_timeline_field('summary', event.summary)}"
+            f"{self._render_timeline_field('status', event.status)}"
+            f"{self._render_timeline_field('next_action', event.next_action)}"
         )
         # Insert before the first ##  after ## Timeline
         timeline_match = re.search(r"(## Timeline\s*\n)", body)
@@ -143,6 +145,32 @@ class ProjectDocument:
             f"- next_action: {event.next_action}\n"
             f"- last_event_id: {event.event_id}"
         )
+
+    def _insert_new_item_with_task(self, proposal: ArchiveProposal) -> str:
+        target = proposal.target
+        work_map_match = re.search(r"(## Work Map\s*\n)", self.body)
+        if not work_map_match:
+            raise ValueError("## Work Map section not found")
+
+        section_match = re.search(r"^## (?!Work Map\b).*$", self.body[work_map_match.end():], re.MULTILINE)
+        insert_pos = work_map_match.end() + section_match.start() if section_match else len(self.body)
+        item_title = target.item_title or target.item_id
+        block = (
+            f"### Item: {item_title} <!-- item:{target.item_id} -->\n"
+            f"{self._render_new_task_block(proposal)}\n\n"
+        )
+        prefix = self.body[:insert_pos].rstrip() + "\n\n"
+        suffix = self.body[insert_pos:].lstrip("\n")
+        return "".join(["---\n", self.frontmatter, "\n---", prefix, block, suffix])
+
+    @staticmethod
+    def _render_timeline_field(key: str, value: object) -> str:
+        text = str(value if value is not None else "").replace("\r\n", "\n").replace("\r", "\n")
+        lines = text.split("\n")
+        rendered = f"  - {key}: {lines[0]}\n"
+        for line in lines[1:]:
+            rendered += f"    {line}\n"
+        return rendered
 
     @staticmethod
     def append_attachments(body: str, proposal: ArchiveProposal, now: "datetime | None" = None) -> str:

@@ -31,6 +31,29 @@ class MarkdownStoreTest(unittest.TestCase):
             ),
         )
 
+    def new_item_proposal(self):
+        return ArchiveProposal(
+            target=TargetRef(
+                project_id="multimodal-labeling",
+                item_id="capture-inbox",
+                item_title="Capture Inbox",
+                task_id="queue-processing",
+                task_title="Queue processing",
+                new_item=True,
+                new_task=True,
+            ),
+            confidence=0.91,
+            reason="User mentioned a new work stream.",
+            event=TimelineEvent(
+                event_id="20260706-100000123-queue-processing",
+                task_id="queue-processing",
+                input_text="Need capture queue support.",
+                summary="Capture queue needs background processing.",
+                status="in_progress",
+                next_action="Design queue processing.",
+            ),
+        )
+
     def test_apply_existing_task_updates_block_and_appends_timeline(self):
         doc = ProjectDocument.from_text(FIXTURE.read_text(encoding="utf-8"))
         updated = doc.apply_proposal(self.proposal(), updated_date="2026-06-30")
@@ -66,6 +89,17 @@ class MarkdownStoreTest(unittest.TestCase):
         self.assertIn("- status:", updated.split("#### Task: Review blocker details")[1])
         self.assertIn("- next_action:", updated.split("#### Task: Review blocker details")[1])
         self.assertIn("- last_event_id:", updated.split("#### Task: Review blocker details")[1])
+
+    def test_new_item_inserts_item_and_task_before_timeline(self):
+        doc = ProjectDocument.from_text(FIXTURE.read_text(encoding="utf-8"))
+        updated = doc.insert_new_task(self.new_item_proposal())
+
+        self.assertIn("### Item: Capture Inbox <!-- item:capture-inbox -->", updated)
+        self.assertIn("#### Task: Queue processing <!-- task:queue-processing -->", updated)
+        self.assertLess(
+            updated.index("### Item: Capture Inbox <!-- item:capture-inbox -->"),
+            updated.index("## Decisions"),
+        )
 
     def test_atomic_write_replaces_whole_file(self):
         with tempfile.TemporaryDirectory() as tmp:

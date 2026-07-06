@@ -14,6 +14,7 @@ class TargetRef:
     item_id: str
     task_id: str
     task_title: str = ""
+    item_title: str = ""
     new_item: bool = False
     new_task: bool = False
 

@@ -496,6 +496,73 @@ class CommitTest(unittest.TestCase):
 
 # ── projects ─────────────────────────────────────────────
 
+    def test_commit_new_item_and_task_does_not_raise_missing_item_anchor(self):
+        proposal_data = _make_mock_proposal_data({
+            "target": {
+                "project_id": "multimodal-labeling",
+                "item_id": "capture-inbox",
+                "item_title": "Capture Inbox",
+                "task_id": "queue-processing",
+                "task_title": "Queue processing",
+                "new_item": True,
+                "new_task": True,
+            },
+            "event": {
+                "event_id": "20260706-100000123-queue-processing",
+                "task_id": "queue-processing",
+                "input_text": "Need to queue quick captures.",
+                "summary": "Quick capture needs a queue.",
+                "status": "in_progress",
+                "next_action": "Design the queue.",
+            },
+        })
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            db = Path(tmp) / "index.sqlite"
+            project.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+            result = handle_commit({
+                "proposal": proposal_data,
+                "project_path": str(project),
+                "db_path": str(db),
+            })
+
+            updated = project.read_text(encoding="utf-8")
+            task = get_task(db, "queue-processing")
+
+            self.assertTrue(result["ok"], str(result))
+            self.assertIn("### Item: Capture Inbox <!-- item:capture-inbox -->", updated)
+            self.assertIn("#### Task: Queue processing <!-- task:queue-processing -->", updated)
+            self.assertIn("<!-- event:20260706-100000123-queue-processing -->", updated)
+            self.assertEqual(task["task_id"], "queue-processing")
+
+    def test_commit_preserves_multiline_input_in_timeline(self):
+        proposal_data = _make_mock_proposal_data({
+            "event": {
+                "event_id": "20260706-110000123-kv-cache-blockers",
+                "input_text": "Line one\nLine two",
+                "summary": "Captured two lines.",
+                "next_action": "Keep both lines.",
+            },
+        })
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            db = Path(tmp) / "index.sqlite"
+            project.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+            result = handle_commit({
+                "proposal": proposal_data,
+                "project_path": str(project),
+                "db_path": str(db),
+            })
+            timeline = handle_timeline({"project_path": str(project)})
+
+            self.assertTrue(result["ok"], str(result))
+            self.assertEqual(timeline["events"][0]["input"], "Line one\nLine two")
+
+
 class ProjectsTest(unittest.TestCase):
     def test_lists_projects_in_workspace(self):
         with tempfile.TemporaryDirectory() as tmp:
