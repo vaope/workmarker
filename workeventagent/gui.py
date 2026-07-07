@@ -124,13 +124,14 @@ def handle_propose(request: dict) -> dict:
     text = request["text"]
     project_path = Path(request["project_path"])
     attachments = request.get("attachments", [])
+    opencode_model = request.get("opencode_model", "")
 
     prompt = f"Archive this update: {text}"
     if attachments:
         paths_str = ", ".join(str(a) for a in attachments)
         prompt += f"\n\nAttachments: {paths_str}"
 
-    raw = run_archivist(prompt, project_path)
+    raw = run_archivist(prompt, project_path, model=opencode_model)
 
     doc_text = project_path.read_text(encoding="utf-8")
     existing_event_ids = _collect_existing_event_ids(doc_text)
@@ -184,6 +185,7 @@ def handle_route_propose(request: dict) -> dict:
     workspace = Path(request["workspace"])
     text = request["text"]
     attachments = request.get("attachments", [])
+    opencode_model = request.get("opencode_model", "")
 
     projects = scan_workspace(workspace)
     if not projects:
@@ -208,6 +210,7 @@ def handle_route_propose(request: dict) -> dict:
             raw = run_project_router(
                 f"Route this work update to one existing project:\n\n{text}",
                 routing_doc,
+                model=opencode_model,
             )
         route = parse_project_route_output(raw, allowed_project_ids)
         selected = next(p for p in projects if p["project_id"] == route["project_id"])
@@ -216,6 +219,7 @@ def handle_route_propose(request: dict) -> dict:
         "text": text,
         "project_path": selected["path"],
         "attachments": attachments,
+        "opencode_model": opencode_model,
     })
     if result.get("ok"):
         result["selected_project"] = {
@@ -746,6 +750,7 @@ def handle_generate_report(request: dict) -> dict:
                     "Summarize this report context as JSON.",
                     context_path,
                     opencode_bin=request.get("opencode_bin", "opencode"),
+                    model=request.get("opencode_model", ""),
                 )
             finally:
                 context_path.unlink(missing_ok=True)
@@ -772,6 +777,7 @@ def handle_generate_report(request: dict) -> dict:
                     "Write a short highlight for this report context as JSON.",
                     context_path,
                     opencode_bin=request.get("opencode_bin", "opencode"),
+                    model=request.get("opencode_model", ""),
                 )
             finally:
                 context_path.unlink(missing_ok=True)
@@ -838,6 +844,7 @@ def handle_inbox_process(request: dict) -> dict:
             "workspace": str(workspace),
             "text": card["text"],
             "attachments": _inbox_attachment_paths(workspace, card),
+            "opencode_model": request.get("opencode_model", ""),
         })
     except Exception as exc:
         update_capture(workspace, capture_id, {"state": "error", "error": str(exc)})

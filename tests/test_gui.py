@@ -304,6 +304,30 @@ class ProposeTest(unittest.TestCase):
         p = result["proposal"]
         self.assertEqual(p["target"]["task_id"], "kv-cache-blockers-2")
 
+    @patch("workeventagent.gui.run_archivist")
+    def test_propose_forwards_opencode_model_to_archivist(self, run_archivist):
+        run_archivist.return_value = """
+{
+  "target": {"project_id": "multimodal-labeling", "item_id": "kv-cache-few-shot", "task_id": "kv-cache-blockers"},
+  "confidence": 0.91,
+  "reason": "Matched.",
+  "event": {"task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
+  "attachment_paths": []
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            project.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+            result = handle_propose({
+                "text": "use selected model",
+                "project_path": str(project),
+                "opencode_model": "anthropic/claude-sonnet-4-5",
+            })
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(run_archivist.call_args.kwargs["model"], "anthropic/claude-sonnet-4-5")
+
 
 class RouteProposeTest(unittest.TestCase):
     def _archive_output(self, project_id: str) -> str:
@@ -389,6 +413,34 @@ class RouteProposeTest(unittest.TestCase):
 
 
 # ── commit ───────────────────────────────────────────────
+
+    @patch("workeventagent.gui.run_project_router")
+    @patch("workeventagent.gui.run_archivist")
+    def test_route_propose_forwards_opencode_model_to_router_and_archivist(self, run_archivist, run_project_router):
+        run_project_router.return_value = '{"project_id":"project-b","confidence":0.82,"reason":"matched B"}'
+        run_archivist.return_value = self._archive_output("project-b")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            db_path = workspace / "index.sqlite"
+            for project_id in ("project-a", "project-b"):
+                handle_init({
+                    "workspace": str(workspace),
+                    "title": project_id,
+                    "project_id": project_id,
+                    "db_path": str(db_path),
+                    "items": [],
+                })
+
+            result = handle_route_propose({
+                "workspace": str(workspace),
+                "text": "input for B",
+                "opencode_model": "openai/gpt-5.1",
+            })
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(run_project_router.call_args.kwargs["model"], "openai/gpt-5.1")
+        self.assertEqual(run_archivist.call_args.kwargs["model"], "openai/gpt-5.1")
+
 
 class CommitTest(unittest.TestCase):
     def test_commit_writes_markdown_and_updates_sqlite(self):
@@ -1780,6 +1832,30 @@ class ReportTest(unittest.TestCase):
             self.assertIn("report_type: daily", text)
             self.assertIn("Persist me", text)
 
+    @patch("workeventagent.gui.run_reporter")
+    def test_generate_report_forwards_opencode_model_to_reporter(self, run_reporter):
+        run_reporter.return_value = '{"highlight":"AI highlight"}'
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            _write_project_with_timeline(
+                workspace,
+                "report-project.md",
+                [("2026-07-03T10:00:00+00:00", "event-one", "task-a", "Summarize me")],
+            )
+
+            result = handle_generate_report({
+                "workspace": str(workspace),
+                "type": "daily",
+                "date_from": "2026-07-03",
+                "date_to": "2026-07-03",
+                "persist": False,
+                "include_ai": True,
+                "opencode_model": "openai/gpt-5.1",
+            })
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(run_reporter.call_args.kwargs["model"], "openai/gpt-5.1")
+
     def test_scheduled_daily_skips_when_no_events(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -1974,12 +2050,14 @@ class InboxHandlerTests(unittest.TestCase):
             result = handle_inbox_process({
                 "workspace": str(ws),
                 "capture_id": created["card"]["capture_id"],
+                "opencode_model": "anthropic/claude-sonnet-4-5",
             })
 
             self.assertTrue(result["ok"], str(result))
             self.assertEqual(result["card"]["state"], "needs_confirmation")
             run_project_router.assert_not_called()  # single project skips router
             run_archivist.assert_called_once()
+            self.assertEqual(run_archivist.call_args.kwargs["model"], "anthropic/claude-sonnet-4-5")
 
     @patch("workeventagent.gui.run_archivist")
     @patch("workeventagent.gui.run_project_router")

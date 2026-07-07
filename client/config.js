@@ -10,6 +10,7 @@ const DEFAULTS = {
   workspace: '',                                   // project library root (chosen on first run)
   hotkey: 'CommandOrControl+Shift+Space',          // global quick-capture hotkey
   pythonCmd: 'python',                             // python executable used by python_bridge
+  opencodeModel: '',                               // optional provider/model; empty uses opencode default
   reportSchedule: {
     dailyEnabled: false,
     dailyTime: '23:30',

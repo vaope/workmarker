@@ -103,6 +103,41 @@ class OpencodeRunnerTest(unittest.TestCase):
         self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
 
     @patch("workeventagent.opencode_runner.subprocess.run")
+    def test_run_archivist_uses_ten_minute_timeout(self, run):
+        run.return_value.stdout = '{"ok": true}'
+        run.return_value.returncode = 0
+
+        run_archivist("input", Path("project.md"), opencode_bin="opencode")
+
+        self.assertEqual(run.call_args.kwargs["timeout"], 600)
+
+    @patch("workeventagent.opencode_runner.subprocess.run")
+    def test_run_archivist_passes_model_flag_when_configured(self, run):
+        run.return_value.stdout = '{"ok": true}'
+        run.return_value.returncode = 0
+
+        run_archivist(
+            "input",
+            Path("project.md"),
+            opencode_bin="opencode",
+            model="openai/gpt-5.1",
+        )
+
+        args = run.call_args.args[0]
+        model_idx = args.index("--model")
+        self.assertEqual(args[model_idx + 1], "openai/gpt-5.1")
+
+    @patch("workeventagent.opencode_runner.subprocess.run")
+    def test_run_archivist_omits_model_flag_when_unconfigured(self, run):
+        run.return_value.stdout = '{"ok": true}'
+        run.return_value.returncode = 0
+
+        run_archivist("input", Path("project.md"), opencode_bin="opencode", model="")
+
+        args = run.call_args.args[0]
+        self.assertNotIn("--model", args)
+
+    @patch("workeventagent.opencode_runner.subprocess.run")
     def test_run_archivist_raises_on_none_stdout(self, run):
         run.return_value.stdout = None
         run.return_value.returncode = 0

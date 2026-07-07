@@ -17,6 +17,7 @@ let tray = null;
 let isQuitting = false;
 
 const PENDING_DIR = path.join(os.tmpdir(), 'workeventagent', 'pending');
+const cfg = () => loadConfig();
 
 function ensurePendingDir() {
   try { fs.mkdirSync(PENDING_DIR, { recursive: true }); } catch { /* ignore */ }
@@ -109,8 +110,6 @@ function registerHotkey() {
 // --- IPC -------------------------------------------------------------------
 
 function attachIpc() {
-  const cfg = () => loadConfig();
-
   ipcMain.handle('wea:getConfig', () => loadConfig());
 
   ipcMain.handle('wea:setWorkspace', (_e, { workspace }) => {
@@ -157,8 +156,15 @@ function attachIpc() {
   ipcMain.handle('wea:listTimeline', async (_e, { projectPath }) =>
     callBackend('timeline', { project_path: projectPath }, cfg().pythonCmd));
 
-  ipcMain.handle('wea:propose', async (_e, { text, projectPath, attachments }) =>
-    callBackend('propose', { text, project_path: projectPath, attachments: attachments || [] }, cfg().pythonCmd));
+  ipcMain.handle('wea:propose', async (_e, { text, projectPath, attachments }) => {
+    const c = cfg();
+    return callBackend('propose', {
+      text,
+      project_path: projectPath,
+      attachments: attachments || [],
+      opencode_model: c.opencodeModel || '',
+    }, c.pythonCmd);
+  });
 
   ipcMain.handle('wea:routePropose', async (_e, { text, attachments }) => {
     const c = cfg();
@@ -167,6 +173,7 @@ function attachIpc() {
       text,
       workspace: c.workspace,
       attachments: attachments || [],
+      opencode_model: c.opencodeModel || '',
     }, c.pythonCmd);
   });
 
@@ -190,7 +197,11 @@ function attachIpc() {
   ipcMain.handle('wea:inboxProcess', async (_e, { captureId }) => {
     const c = cfg();
     if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
-    return callBackend('inbox_process', { workspace: c.workspace, capture_id: captureId }, c.pythonCmd);
+    return callBackend('inbox_process', {
+      workspace: c.workspace,
+      capture_id: captureId,
+      opencode_model: c.opencodeModel || '',
+    }, c.pythonCmd);
   });
 
   ipcMain.handle('wea:inboxCommit', async (_e, { captureId, edits }) => {
@@ -306,6 +317,7 @@ function attachIpc() {
       persist: request.persist !== false,
       mode: request.mode || 'manual',
       include_ai: request.includeAi !== false,
+      opencode_model: c.opencodeModel || '',
     }, c.pythonCmd);
   });
 
@@ -434,6 +446,7 @@ async function runScheduledReports(now = new Date()) {
       persist: true,
       mode: 'scheduled',
       include_ai: true,
+      opencode_model: c.opencodeModel || '',
     }, c.pythonCmd);
     saveConfig({ reportSchedule: { ...schedule, lastDailyRunDate: today, lastRunStatus: JSON.stringify(res) } });
   }
@@ -453,6 +466,7 @@ async function runScheduledReports(now = new Date()) {
       persist: true,
       mode: 'scheduled',
       include_ai: true,
+      opencode_model: c.opencodeModel || '',
     }, c.pythonCmd);
     saveConfig({ reportSchedule: { ...schedule, lastWeeklyRunKey: weekKey, lastRunStatus: JSON.stringify(res) } });
   }

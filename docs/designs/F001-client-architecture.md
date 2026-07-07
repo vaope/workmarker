@@ -208,7 +208,7 @@ client/
   main.js               # 主进程：窗口/热键/托盘/剪贴板/IPC/桥
   preload.js            # contextBridge 暴露 window.wea.*
   python_bridge.js      # spawn python -m workeventagent.gui，JSON 往返
-  config.js             # userData/config.json 读写（workspace、热键）
+  config.js             # userData/config.json 读写（workspace、热键、opencode 模型）
   windows/
     main.html  main.css  main.js        # 主窗口渲染
     capture.html capture.css capture.js # 快速捕获浮窗渲染
@@ -230,7 +230,7 @@ preload 暴露（`window.wea`）：
 | `generateReport(request)` | gui generate_report（报告生成见 `docs/designs/F002-report-generation.md`） |
 | `readClipboardImage()` | 主进程 clipboard.readImage → 写 temp → 返回 {tempPath, filename} 或 null |
 | `getConfig()` / `setWorkspace(path)` | config 读写 |
-| `updateConfig(patch)` | config 读写；hotkey 变化时主进程即时重新注册全局快捷键 |
+| `updateConfig(patch)` | config 读写；hotkey 变化时主进程即时重新注册全局快捷键；opencodeModel 为空时使用 opencode 默认模型 |
 | `pickWorkspaceDir()` | dialog 选目录 |
 | `onShowCapture(cb)` | 主进程→渲染：全局热键触发 |
 | `hideCapture()` / `resizeInput(h)` | 窗口控制 |
@@ -240,7 +240,7 @@ preload 暴露（`window.wea`）：
 ## 6. 配置与默认值
 
 - config 路径：`app.getPath('userData')/config.json`。
-- 字段：`{"workspace": "<abs>", "dbPath": "<workspace>/index.sqlite", "hotkey": "CommandOrControl+Shift+Space", "pythonCmd": "python"}`。
+- 字段：`{"workspace": "<abs>", "dbPath": "<workspace>/index.sqlite", "hotkey": "CommandOrControl+Shift+Space", "pythonCmd": "python", "opencodeModel": ""}`；`opencodeModel` 使用 `provider/model` 格式，空值表示使用 opencode 默认模型。
 - 首启 workspace 为空 → 引导选目录（默认建议 `Documents/WorkEventAgent`）。
 - temp 暂存：`os.tmpdir()/workeventagent/pending/`。
 

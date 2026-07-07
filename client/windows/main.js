@@ -890,6 +890,7 @@ function openSettingsModal() {
   state.settingsWorkspace = (state.config && state.config.workspace) || '';
   $('#settings-workspace').value = state.settingsWorkspace;
   $('#settings-hotkey').value = (state.config && state.config.hotkey) || 'CommandOrControl+Shift+Space';
+  $('#settings-model').value = (state.config && state.config.opencodeModel) || '';
   $('#settings-error').classList.add('hidden');
   $('#settings-modal').classList.remove('hidden');
   // Re-attach keydown capture each time modal opens (prevents duplicate listeners)
@@ -927,7 +928,7 @@ async function pickSettingsWorkspace() {
 
 async function saveSettings() {
   const hotkey = $('#settings-hotkey').value.trim() || 'CommandOrControl+Shift+Space';
-  const patch = { hotkey };
+  const patch = { hotkey, opencodeModel: $('#settings-model').value.trim() };
   if (state.settingsWorkspace) patch.workspace = state.settingsWorkspace;
   $('#settings-save').disabled = true;
   try {

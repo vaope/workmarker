@@ -13,45 +13,60 @@ class OpencodeRunnerError(Exception):
     """Raised when the opencode archivist fails to produce a valid proposal."""
 
 
+OPENCODE_TIMEOUT_SECONDS = 600
+
+
 def run_archivist(
-    prompt: str, project_doc: Path, opencode_bin: str = "opencode"
+    prompt: str, project_doc: Path, opencode_bin: str = "opencode", model: str = ""
 ) -> str:
     return _run_opencode_agent(
         prompt=prompt,
         input_doc=project_doc,
         agent_name="workevent-archivist",
         opencode_bin=opencode_bin,
+        model=model,
     )
 
 
 def run_project_router(
-    prompt: str, routing_doc: Path, opencode_bin: str = "opencode"
+    prompt: str, routing_doc: Path, opencode_bin: str = "opencode", model: str = ""
 ) -> str:
     return _run_opencode_agent(
         prompt=prompt,
         input_doc=routing_doc,
         agent_name="workevent-router",
         opencode_bin=opencode_bin,
+        model=model,
     )
 
 
 def run_reporter(
-    prompt: str, report_doc: Path, opencode_bin: str = "opencode"
+    prompt: str, report_doc: Path, opencode_bin: str = "opencode", model: str = ""
 ) -> str:
     return _run_opencode_agent(
         prompt=prompt,
         input_doc=report_doc,
         agent_name="workevent-reporter",
         opencode_bin=opencode_bin,
+        model=model,
     )
 
 
 def _run_opencode_agent(
-    prompt: str, input_doc: Path, agent_name: str, opencode_bin: str = "opencode"
+    prompt: str,
+    input_doc: Path,
+    agent_name: str,
+    opencode_bin: str = "opencode",
+    model: str = "",
 ) -> str:
     cmd = [
         _resolve_executable(opencode_bin),
         "run",
+    ]
+    model = model.strip()
+    if model:
+        cmd.extend(["--model", model])
+    cmd.extend([
         "--agent",
         agent_name,
         "--file",
@@ -59,7 +74,7 @@ def _run_opencode_agent(
         "--format",
         "json",
         prompt,
-    ]
+    ])
     try:
         result = subprocess.run(
             cmd,
@@ -68,8 +83,12 @@ def _run_opencode_agent(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=120,
+            timeout=OPENCODE_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise OpencodeRunnerError(
+            f"opencode timed out after {OPENCODE_TIMEOUT_SECONDS} seconds"
+        ) from exc
     except FileNotFoundError as exc:
         raise OpencodeRunnerError(
             f"could not start opencode executable: {opencode_bin}"
