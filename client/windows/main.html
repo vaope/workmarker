@@ -47,23 +47,18 @@
       <header class="content-head">
         <div class="head-left">
           <div class="tabs">
-            <button class="tab active" data-view="tasks">任务视图</button>
-            <button class="tab" data-view="timeline">时间线</button>
+            <button class="tab active" data-view="tasks">工作地图</button>
             <button class="tab" data-view="reports">报告</button>
             <button class="tab" data-view="inbox">收件箱</button>
             <button class="tab" data-view="search">搜索</button>
           </div>
-          <button id="new-item" class="ghost small">+ 新建需求</button>
+          <button id="new-item" class="ghost small">+ 新建工作项</button>
         </div>
         <span id="project-title" class="project-title"></span>
       </header>
 
       <section id="tasks-view" class="view">
         <div id="tasks-body" class="scroll-body"></div>
-      </section>
-
-      <section id="timeline-view" class="view hidden">
-        <div id="timeline-body" class="scroll-body"></div>
       </section>
 
       <section id="reports-view" class="view hidden">
@@ -108,7 +103,7 @@
 
       <section id="search-view" class="view hidden">
         <div class="search-bar">
-          <input id="global-search" aria-label="搜索项目、任务、时间线、报告" placeholder="搜索项目、任务、时间线、报告…" />
+          <input id="global-search" aria-label="搜索项目、工作项、任务、报告" placeholder="搜索项目、工作项、任务、报告…" />
           <button class="primary" id="search-run">搜索</button>
         </div>
         <div id="search-results" class="search-results scroll-body"></div>
@@ -155,11 +150,11 @@
 
   <div id="manual-modal" class="modal hidden">
     <div class="modal-card small-card">
-      <h2 id="manual-title">新建需求</h2>
-      <label id="manual-item-field" class="field hidden">所属需求
+      <h2 id="manual-title">新建工作项</h2>
+      <label id="manual-item-field" class="field hidden">所属工作项
         <select id="manual-item"></select>
       </label>
-      <label class="field"><span id="manual-name-label">需求名称</span>
+      <label class="field"><span id="manual-name-label">工作项名称</span>
         <input id="manual-name" type="text" placeholder="例如：明确项目需求" />
       </label>
       <label class="field">背景介绍 <span class="hint">（可选）</span>
@@ -176,8 +171,8 @@
   <!-- 编辑需求模态 -->
   <div id="edit-item-modal" class="modal hidden">
     <div class="modal-card small-card">
-      <h2>编辑需求</h2>
-      <label class="field">需求名称
+      <h2>编辑工作项</h2>
+      <label class="field">工作项名称
         <input id="edit-item-title" type="text" placeholder="需求名称" />
       </label>
       <label class="field">背景介绍 <span class="hint">（可选）</span>
@@ -259,6 +254,7 @@
 
   <div id="toast" class="toast hidden"></div>
 
+  <script src="work-map.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

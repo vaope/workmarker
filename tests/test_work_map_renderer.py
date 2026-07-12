@@ -63,3 +63,28 @@ process.stdout.write(WorkMap.render([item]));
     assert "&lt;script&gt;" in result.stdout
     assert "0/0" in result.stdout
     assert "+ 新建任务" in result.stdout
+
+
+def test_main_window_uses_work_map_without_project_timeline() -> None:
+    html = Path("client/windows/main.html").read_text(encoding="utf-8")
+    source = Path("client/windows/main.js").read_text(encoding="utf-8")
+    assert '<script src="work-map.js"></script>' in html
+    assert 'data-view="timeline"' not in html
+    assert 'id="timeline-view"' not in html
+    refresh = source[source.index("async function refreshCurrent"):source.index("function switchView")]
+    assert "wea.listTimeline" not in refresh
+    assert "WorkMap.render(items)" in source
+    assert "wea.updateTask(projectPath, task.task_id, 'status', nextStatus)" in source
+
+
+def test_main_window_uses_confirmed_hierarchy_labels() -> None:
+    html = Path("client/windows/main.html").read_text(encoding="utf-8")
+    source = Path("client/windows/main.js").read_text(encoding="utf-8")
+    renderer = Path("client/windows/work-map.js").read_text(encoding="utf-8")
+    combined = html + source + renderer
+    assert "+ 新建工作项" in combined
+    assert "+ 新建任务" in combined
+    assert "工作项名称" in combined
+    assert "任务名称" in combined
+    assert "删除需求" not in combined
+    assert "所属需求" not in combined

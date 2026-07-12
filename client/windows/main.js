@@ -6,7 +6,6 @@ const state = {
   projects: [],
   currentProject: null, // {project_id, title, path}
   tasksData: null,      // {items:[{item_id,title,tasks:[...]}]}
-  timelineData: null,   // {events:[...]}
   pending: [],          // [{tempPath, filename}]
   proposal: null,       // proposal awaiting confirmation
   view: 'tasks',
@@ -181,13 +180,9 @@ async function selectProject(p) {
 async function refreshCurrent() {
   if (!state.currentProject) return;
   const path = state.currentProject.path;
-  const [tasks, timeline] = await Promise.all([
-    wea.listTasks(path), wea.listTimeline(path),
-  ]);
+  const tasks = await wea.listTasks(path);
   state.tasksData = tasks && tasks.ok ? tasks : { items: [] };
-  state.timelineData = timeline && timeline.ok ? timeline : { events: [] };
   renderTasks();
-  renderTimeline();
   // refresh sidebar counts quietly
   const fresh = await wea.listProjects();
   if (fresh && fresh.ok) { state.projects = fresh.projects; renderProjectList(state.projects); }
@@ -197,7 +192,6 @@ function switchView(view) {
   state.view = view;
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
   $('#tasks-view').classList.toggle('hidden', view !== 'tasks');
-  $('#timeline-view').classList.toggle('hidden', view !== 'timeline');
   $('#reports-view').classList.toggle('hidden', view !== 'reports');
   $('#inbox-view').classList.toggle('hidden', view !== 'inbox');
   if (view === 'inbox') loadInbox();
@@ -227,7 +221,7 @@ function runSearch() {
     $('#search-results').innerHTML =
       '<div class="search-header">' + r.results.length + ' 条结果</div>' +
       r.results.map((d) => {
-        const kindLabel = { project: '项目', item: '需求', task: '工作项', timeline: '时间线', report: '报告', inbox: '收件箱' }[d.kind] || d.kind;
+        const kindLabel = { project: '项目', item: '工作项', task: '任务', timeline: '时间线', report: '报告', inbox: '收件箱' }[d.kind] || d.kind;
         const title = esc(d.title || d.snippet || '').substring(0, 120);
         const path = esc(d.path || '');
         return '<div class="search-result" data-path="' + path + '" data-kind="' + d.kind + '" data-proj-id="' + esc(d.project_id || '') + '">' +
@@ -260,82 +254,65 @@ function bindSearchResults() {
 function renderTasks() {
   const body = $('#tasks-body');
   const items = (state.tasksData && state.tasksData.items) || [];
-  if (!items.length) { body.innerHTML = '<div class="empty">这个项目还没有事项/任务。</div>'; return; }
-  body.innerHTML = '';
-  items.forEach((item) => {
-    const group = document.createElement('div');
-    group.className = 'item-group';
-    const head = document.createElement('div');
-    head.className = 'item-head';
-    head.innerHTML =
-      `<span class="item-head-title">${esc(item.title)}</span>` +
-      `<span class="item-head-acts">
-         <button class="icon-btn item-edit-btn" title="重命名">✏️</button>
-         <button class="icon-btn item-del-btn" title="删除需求">🗑️</button>
-         <button class="ghost add-task-mini" type="button">+ 工作项</button>
-       </span>`;
-    head.querySelector('.add-task-mini').addEventListener('click', (e) => {
-      e.stopPropagation();
-      openManualModal('task', item.item_id);
-    });
-    head.querySelector('.item-edit-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      promptEditItem(item);
-    });
-    head.querySelector('.item-del-btn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      confirmDeleteItem(item);
-    });
-    group.appendChild(head);
-    const tasks = item.tasks || [];
-    if (!tasks.length) {
-      const empty = document.createElement('div');
-      empty.className = 'empty-tasks';
-      empty.textContent = '暂无工作项';
-      group.appendChild(empty);
-    } else {
-      tasks.forEach((task) => group.appendChild(taskRow(task)));
+  if (!items.length) {
+    body.innerHTML = '<div class="empty">这个项目还没有工作项。点击「+ 新建工作项」开始。</div>';
+    return;
+  }
+  body.innerHTML = WorkMap.render(items);
+  bindWorkMapActions();
+}
+
+function findItem(itemId) {
+  return ((state.tasksData && state.tasksData.items) || [])
+    .find((item) => item.item_id === itemId) || null;
+}
+
+function findTask(taskId) {
+  for (const item of ((state.tasksData && state.tasksData.items) || [])) {
+    const task = (item.tasks || []).find((candidate) => candidate.task_id === taskId);
+    if (task) return task;
+  }
+  return null;
+}
+
+function bindWorkMapActions() {
+  document.querySelectorAll('.item-group').forEach((group) => {
+    const item = findItem(group.dataset.itemId);
+    if (!item) return;
+    group.querySelector('.item-add-task').addEventListener('click', () => openManualModal('task', item.item_id));
+    group.querySelector('.item-edit-btn').addEventListener('click', () => openEditItemModal(item));
+    group.querySelector('.item-del-btn').addEventListener('click', () => confirmDeleteItem(item));
+  });
+  document.querySelectorAll('.task-row').forEach((row) => {
+    const task = findTask(row.dataset.taskId);
+    if (!task) return;
+    row.querySelector('.task-check').addEventListener('change', (event) => toggleTaskCompletion(event.currentTarget, task));
+    row.querySelector('.task-edit-btn').addEventListener('click', () => showTaskEditor(row, task));
+    row.querySelector('.task-del-btn').addEventListener('click', () => confirmDeleteTask(row, task));
+  });
+}
+
+async function toggleTaskCompletion(input, task) {
+  const previousStatus = task.status === 'done' ? 'done' : 'in_progress';
+  const nextStatus = previousStatus === 'done' ? 'in_progress' : 'done';
+  const projectPath = state.currentProject.path;
+  input.disabled = true;
+  try {
+    const result = await wea.updateTask(projectPath, task.task_id, 'status', nextStatus);
+    if (!result || !result.ok) {
+      input.checked = previousStatus === 'done';
+      input.disabled = false;
+      toast(`更新任务失败：${(result && result.error) || '后端错误'}`, 'err');
+      return;
     }
-    body.appendChild(group);
-  });
+    await refreshCurrent();
+  } catch (error) {
+    input.checked = previousStatus === 'done';
+    input.disabled = false;
+    toast(`更新任务出错：${error.message || error}`, 'err');
+  }
 }
 
-function taskRow(task) {
-  const row = document.createElement('div');
-  row.className = 'task-row';
-  const st = task.status === 'done' ? 'done' : 'in_progress';
-  const stLabel = st === 'done' ? '已完成' : '进行中';
-  const events = ((state.timelineData && state.timelineData.events) || [])
-    .filter((e) => e.task_id === task.task_id);
-  row.innerHTML =
-    `<div class="task-top">
-       <span class="task-name"><span class="dot ${st}"></span>${esc(task.title)}</span>
-       <span class="task-acts">
-         <button class="icon-btn task-edit-btn" title="编辑">✏️</button>
-         <button class="icon-btn task-del-btn" title="删除">🗑️</button>
-         <span class="status-tag ${st}">${stLabel}</span>
-       </span>
-     </div>` +
-    (task.next_action ? `<div class="task-next">${esc(task.next_action)}</div>` : '') +
-    (task.updated_at ? `<div class="task-updated">${esc(relTime(task.updated_at))}</div>` : '') +
-    `<div class="task-timeline">${events.map(eventLine).join('') || '<div class="tl-event">暂无归档事件</div>'}</div>`;
-  row.querySelector('.task-edit-btn').addEventListener('click', (e) => {
-    e.stopPropagation();
-    showTaskEditor(row, task);
-  });
-  row.querySelector('.task-del-btn').addEventListener('click', (e) => {
-    e.stopPropagation();
-    confirmDeleteTask(row, task);
-  });
-  row.addEventListener('click', () => row.classList.toggle('expanded'));
-  return row;
-}
-
-function eventLine(e) {
-  return `<div class="tl-event"><span class="tl-time">${esc(fmtTime(e.timestamp))}</span> — ${esc(e.summary)}</div>`;
-}
-
-// ---- timeline view -------------------------------------------------------
 // ---- inbox view ----------------------------------------------------------
 
 async function loadInbox() {
@@ -392,39 +369,6 @@ function bindInboxActions() {
   document.querySelectorAll('.inbox-cancel').forEach(function(btn) { btn.addEventListener('click', async function() { btn.textContent = '...'; btn.disabled = true; await wea.cancelCapture(btn.dataset.id); loadInbox(); }); });
   document.querySelectorAll('.inbox-open').forEach(function(btn) { btn.addEventListener('click', function() { var proj = state.projectList.find(function(p) { return p.path === btn.dataset.path; }); if (proj) selectProject(proj); }); });
 }
-function renderTimeline() {
-  const body = $('#timeline-body');
-  const events = (state.timelineData && state.timelineData.events) || [];
-  if (!events.length) { body.innerHTML = '<div class="empty">还没有归档事件。</div>'; return; }
-  body.innerHTML = '';
-  events.forEach((e) => {
-    const row = document.createElement('div');
-    row.className = 'tl-row';
-    row.innerHTML =
-      `<div class="tl-when">${esc(fmtTime(e.timestamp))}</div>
-       <div class="tl-main">
-         <div class="tl-path">${esc(e.task_title || e.task_id)}</div>
-         <div class="tl-summary">${esc(e.summary)}</div>
-         ${e.has_attachment ? '<div class="tl-clip">📎 含附件</div>' : ''}
-       </div>
-       <button class="ghost tl-correct" data-event-id="${esc(e.event_id)}" data-task-id="${esc(e.task_id)}" data-item-id="${esc(e.item_id)}" data-summary="${esc(e.summary)}" data-status="${esc(e.status)}" data-next-action="${esc(e.next_action || '')}">纠正</button>`;
-    body.appendChild(row);
-  });
-  // bind correction buttons after rendering
-  body.querySelectorAll('.tl-correct').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const event = {
-        event_id: btn.dataset.eventId,
-        task_id: btn.dataset.taskId,
-        item_id: btn.dataset.itemId,
-        summary: btn.dataset.summary,
-        status: btn.dataset.status,
-        next_action: btn.dataset.nextAction,
-      };
-      openCorrectionModal(event);
-    });
-  });
-}
 
 // ---- inline edit / delete helpers ----------------------------------------
 
@@ -446,7 +390,7 @@ function closeEditItemModal() {
 async function saveEditItem() {
   const title = $('#edit-item-title').value.trim();
   if (!title) {
-    $('#edit-item-error').textContent = '需求名称不能为空';
+    $('#edit-item-error').textContent = '工作项名称不能为空';
     $('#edit-item-error').classList.remove('hidden');
     return;
   }
@@ -468,7 +412,7 @@ async function saveEditItem() {
       return;
     }
     closeEditItemModal();
-    toast('需求已更新', 'ok');
+    toast('工作项已更新', 'ok');
     await refreshCurrent();
   } catch (err) {
     $('#edit-item-error').textContent = `保存出错：${err.message || err}`;
@@ -487,7 +431,7 @@ async function doUpdateItem(itemId, title) {
   try {
     const res = await wea.updateItem(state.currentProject.path, itemId, title);
     if (!res || !res.ok) { toast(`重命名失败：${(res && res.error) || '后端错误'}`, 'err'); return; }
-    toast('需求已重命名', 'ok');
+    toast('工作项已重命名', 'ok');
     await refreshCurrent();
   } catch (err) { toast(`重命名出错：${err.message || err}`, 'err'); }
 }
@@ -495,8 +439,8 @@ async function doUpdateItem(itemId, title) {
 function confirmDeleteItem(item) {
   const taskCount = item.tasks ? item.tasks.length : 0;
   const msg = taskCount > 0
-    ? `删除「${item.title}」及其下 ${taskCount} 个工作项？此操作不可撤销。`
-    : `删除空需求「${item.title}」？`;
+    ? `删除「${item.title}」及其下 ${taskCount} 个任务？此操作不可撤销。`
+    : `删除空工作项「${item.title}」？`;
   showDeleteConfirm(msg, () => doDeleteItem(item.item_id));
 }
 
@@ -504,7 +448,7 @@ async function doDeleteItem(itemId) {
   try {
     const res = await wea.deleteItem(state.currentProject.path, itemId);
     if (!res || !res.ok) { toast(`删除失败：${(res && res.error) || '后端错误'}`, 'err'); return; }
-    toast('需求已删除', 'ok');
+    toast('工作项已删除', 'ok');
     await refreshCurrent();
   } catch (err) { toast(`删除出错：${err.message || err}`, 'err'); }
 }
@@ -805,8 +749,8 @@ function openManualModal(mode, itemId = '') {
   $('#manual-create').disabled = false;
 
   const isTask = mode === 'task';
-  $('#manual-title').textContent = isTask ? '新建工作项' : '新建需求';
-  $('#manual-name-label').textContent = isTask ? '工作项名称' : '需求名称';
+  $('#manual-title').textContent = isTask ? '新建任务' : '新建工作项';
+  $('#manual-name-label').textContent = isTask ? '任务名称' : '工作项名称';
   $('#manual-name').placeholder = isTask ? '例如：梳理推理链路' : '例如：明确项目需求';
   $('#manual-item-field').classList.toggle('hidden', !isTask);
 
@@ -817,7 +761,7 @@ function openManualModal(mode, itemId = '') {
       .map((item) => `<option value="${esc(item.item_id)}">${esc(item.title)}</option>`)
       .join('');
     if (!items.length) {
-      toast('请先新建一个需求，再添加工作项', 'err');
+      toast('请先新建一个工作项，再添加任务', 'err');
       return;
     }
     select.value = itemId || items[0].item_id;
@@ -837,7 +781,7 @@ async function createManualEntry() {
   const title = $('#manual-name').value.trim();
   const mode = state.manualMode;
   if (!title) {
-    showManualError(mode === 'task' ? '请填写工作项名称' : '请填写需求名称');
+    showManualError(mode === 'task' ? '请填写任务名称' : '请填写工作项名称');
     return;
   }
 
@@ -854,7 +798,7 @@ async function createManualEntry() {
     }
 
     closeManualModal();
-    toast(mode === 'task' ? '工作项已创建' : '需求已创建', 'ok');
+    toast(mode === 'task' ? '任务已创建' : '工作项已创建', 'ok');
     await refreshCurrent();
   } catch (err) {
     showManualError(`创建失败：${err.message || err}`);
