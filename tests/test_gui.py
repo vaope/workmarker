@@ -1645,6 +1645,32 @@ class UpdateTaskTest(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_checkbox_status_update_preserves_timeline_and_rebuilds_index(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            task = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"][0]
+            before_text = proj.read_text(encoding="utf-8")
+            before_timeline = before_text.split("## Timeline", 1)[1]
+
+            result = handle_update_task({
+                "project_path": str(proj),
+                "db_path": str(db),
+                "task_id": task["task_id"],
+                "field": "status",
+                "value": "done",
+            })
+
+            self.assertTrue(result["ok"])
+            after_text = proj.read_text(encoding="utf-8")
+            self.assertEqual(after_text.split("## Timeline", 1)[1], before_timeline)
+            self.assertEqual(
+                handle_tasks({"project_path": str(proj)})["items"][0]["tasks"][0]["status"],
+                "done",
+            )
+            self.assertEqual(get_task(db, task["task_id"])["status"], "done")
+        finally:
+            tmp.cleanup()
+
 
 # ── generate_report ────────────────────────────────────────
 
