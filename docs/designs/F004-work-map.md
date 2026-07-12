@@ -8,7 +8,7 @@ created: 2026-07-12
 
 # F004 Project Work Map and Unified Capture
 
-> Status: spec | Owner: @cat-z8iqdgtj
+> Status: implemented (quality-gate passed) | Implementer: @cat-o1e4zfgp | Owner: @cat-z8iqdgtj
 
 ## Why
 
@@ -199,19 +199,19 @@ The approved mockup is the information-architecture reference, not a pixel-perfe
 
 ## Acceptance Criteria
 
-- [ ] AC-1: The main page defaults to a work map grouped as Project → Work Item → Task.
-- [ ] AC-2: All main-window labels use 项目 / 工作项 / 任务 consistently.
-- [ ] AC-3: Checking a task writes `status: done`, updates SQLite/sidebar counts, and creates no Timeline event.
-- [ ] AC-4: Unchecking a completed task writes `status: in_progress` and creates no Timeline event.
-- [ ] AC-5: Checkbox failure restores the previous visual state and presents a visible error.
-- [ ] AC-6: Task rows contain no event list, last-updated text, or expandable history.
-- [ ] AC-7: The project navigation has no Timeline tab; Timeline storage and backend APIs remain intact.
-- [ ] AC-8: Work-item progress shows correct completed/total counts, including `0/0` for an empty item.
-- [ ] AC-9: Main-window capture creates an Inbox card before processing, clears only after durable creation, and permits immediate next input.
-- [ ] AC-10: Main-window processing failure leaves a retryable durable Inbox error card.
-- [ ] AC-11: Today summary counts are derived from current Inbox/task data and its three shortcuts navigate correctly.
-- [ ] AC-12: Reports, Search, Inbox, editing, deletion, project creation, settings, correction recovery, and quick capture remain functional.
-- [ ] AC-13: Existing Python tests and renderer tests pass; all client JavaScript passes syntax checks.
+- [x] AC-1: The main page defaults to a work map grouped as Project → Work Item → Task.
+- [x] AC-2: All main-window labels use 项目 / 工作项 / 任务 consistently.
+- [x] AC-3: Checking a task writes `status: done`, updates SQLite/sidebar counts, and creates no Timeline event.
+- [x] AC-4: Unchecking a completed task writes `status: in_progress` and creates no Timeline event.
+- [x] AC-5: Checkbox failure restores the previous visual state and presents a visible error.
+- [x] AC-6: Task rows contain no event list, last-updated text, or expandable history.
+- [x] AC-7: The project navigation has no Timeline tab; Timeline storage and backend APIs remain intact.
+- [x] AC-8: Work-item progress shows correct completed/total counts, including `0/0` for an empty item.
+- [x] AC-9: Main-window capture creates an Inbox card before processing, clears only after durable creation, and permits immediate next input.
+- [x] AC-10: Main-window processing failure leaves a retryable durable Inbox error card.
+- [x] AC-11: Today summary counts are derived from current Inbox/task data and its three shortcuts navigate correctly.
+- [x] AC-12: Reports, Search, Inbox, editing, deletion, project creation, settings, correction recovery, and quick capture remain functional.
+- [x] AC-13: Existing Python tests and renderer tests pass; all client JavaScript passes syntax checks.
 
 ## Non-Goals
 
