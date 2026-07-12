@@ -71,6 +71,7 @@ def test_main_window_uses_work_map_without_project_timeline() -> None:
     assert '<script src="work-map.js"></script>' in html
     assert 'data-view="timeline"' not in html
     assert 'id="timeline-view"' not in html
+    assert 'timeline-body' not in source
     refresh = source[source.index("async function refreshCurrent"):source.index("function switchView")]
     assert "wea.listTimeline" not in refresh
     assert "WorkMap.render(items)" in source
