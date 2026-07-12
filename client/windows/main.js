@@ -160,7 +160,7 @@ async function loadProjects() {
     state.currentProject = null;
     $('#project-title').textContent = '';
     $('#tasks-body').innerHTML = '<div class="empty">还没有项目。点左下角「+ 新建项目」开始。</div>';
-    $('#timeline-body').innerHTML = '';
+
   }
 }
 
@@ -258,7 +258,7 @@ function bindSearchResults() {
       const kind = el.dataset.kind;
       const projId = el.dataset.projId;
       if (kind === 'report' && path) { wea.openProjectDir(path); return; }
-      const proj = state.projectList.find((p) => p.path === path || p.project_id === projId);
+      const proj = state.projects.find((p) => p.path === path || p.project_id === projId);
       if (proj) { selectProject(proj); switchView('tasks'); }
     });
   });
@@ -381,7 +381,7 @@ function bindInboxActions() {
   document.querySelectorAll('.inbox-confirm').forEach(function(btn) { btn.addEventListener('click', async function() { btn.textContent = '...'; btn.disabled = true; await wea.commitCapture(btn.dataset.id, {}); loadInbox(); }); });
   document.querySelectorAll('.inbox-retry').forEach(function(btn) { btn.addEventListener('click', async function() { btn.textContent = '...'; btn.disabled = true; await wea.processCapture(btn.dataset.id); loadInbox(); }); });
   document.querySelectorAll('.inbox-cancel').forEach(function(btn) { btn.addEventListener('click', async function() { btn.textContent = '...'; btn.disabled = true; await wea.cancelCapture(btn.dataset.id); loadInbox(); }); });
-  document.querySelectorAll('.inbox-open').forEach(function(btn) { btn.addEventListener('click', function() { var proj = state.projectList.find(function(p) { return p.path === btn.dataset.path; }); if (proj) selectProject(proj); }); });
+  document.querySelectorAll('.inbox-open').forEach(function(btn) { btn.addEventListener('click', function() { var proj = state.projects.find(function(p) { return p.path === btn.dataset.path; }); if (proj) selectProject(proj); }); });
 }
 
 // ---- today summary ---------------------------------------------------------
@@ -573,14 +573,14 @@ async function saveTaskEdits(task, newTitle, newStatus, newNext, row) {
 }
 
 function confirmDeleteTask(row, task) {
-  showDeleteConfirm(`删除工作项「${task.title}」？时间线归档记录会保留。此操作不可撤销。`, () => doDeleteTask(task.task_id, row));
+  showDeleteConfirm(`删除任务「${task.title}」？时间线归档记录会保留。此操作不可撤销。`, () => doDeleteTask(task.task_id, row));
 }
 
 async function doDeleteTask(taskId, row) {
   try {
     const res = await wea.deleteTask(state.currentProject.path, taskId);
     if (!res || !res.ok) { toast(`删除失败：${(res && res.error) || '后端错误'}`, 'err'); return; }
-    toast('工作项已删除', 'ok');
+    toast('任务已删除', 'ok');
     await refreshCurrent();
   } catch (err) { toast(`删除出错：${err.message || err}`, 'err'); }
 }
@@ -890,8 +890,8 @@ function addInitItem() {
   div.className = 'init-item';
   div.innerHTML =
     `<div class="row">
-       <input class="item-title" placeholder="事项名，如：使用 KV cache 优化 few-shot" />
-       <button class="rm-x" title="删除事项">×</button>
+       <input class="item-title" placeholder="工作项名，如：使用 KV cache 优化 few-shot" />
+       <button class="rm-x" title="删除工作项">×</button>
      </div>
      <div class="tasks"></div>
      <button class="ghost add-task">+ 添加任务</button>`;
