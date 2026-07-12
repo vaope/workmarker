@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <defs>
+    <style>
+      .bg { fill: #f6f7fb; }
+      .panel { fill: #ffffff; stroke: #dfe3ea; stroke-width: 1; }
+      .muted-panel { fill: #f9fafc; stroke: #e5e8ef; stroke-width: 1; }
+      .primary { fill: #2563eb; }
+      .primary-soft { fill: #e8f0ff; }
+      .green { fill: #16a34a; }
+      .green-soft { fill: #e8f8ee; }
+      .amber { fill: #d97706; }
+      .amber-soft { fill: #fff4df; }
+      .text { fill: #172033; font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif; }
+      .dim { fill: #667085; font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif; }
+      .faint { fill: #98a2b3; font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif; }
+      .h1 { font-size: 26px; font-weight: 700; }
+      .h2 { font-size: 18px; font-weight: 700; }
+      .body { font-size: 14px; }
+      .small { font-size: 12px; }
+      .tiny { font-size: 11px; }
+      .mono { font-family: "Cascadia Mono", Consolas, monospace; }
+      .shadow { filter: drop-shadow(0 8px 24px rgba(15, 23, 42, .08)); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1440" height="900"/>
+
+  <!-- App shell -->
+  <rect x="36" y="28" width="1368" height="844" rx="18" class="panel shadow"/>
+
+  <!-- Left project rail -->
+  <rect x="36" y="28" width="250" height="844" rx="18" fill="#111827"/>
+  <rect x="36" y="28" width="250" height="844" rx="18" fill="#111827"/>
+  <text x="64" y="74" fill="#ffffff" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="20" font-weight="700">WorkEventAgent</text>
+  <text x="64" y="99" fill="#9ca3af" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="12">个人工作记忆</text>
+
+  <rect x="58" y="126" width="206" height="38" rx="10" fill="#1f2937"/>
+  <text x="78" y="150" fill="#e5e7eb" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="14">今日</text>
+  <circle cx="239" cy="145" r="11" fill="#2563eb"/>
+  <text x="235" y="149" fill="#fff" font-family="Segoe UI, Arial" font-size="12" font-weight="700">5</text>
+
+  <text x="64" y="201" fill="#9ca3af" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="12">项目</text>
+  <rect x="58" y="216" width="206" height="54" rx="12" fill="#2563eb"/>
+  <text x="78" y="240" fill="#ffffff" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="14" font-weight="700">WorkEventAgent</text>
+  <text x="78" y="258" fill="#dbeafe" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="11">3 个工作项 · 8 个未完成任务</text>
+
+  <rect x="58" y="282" width="206" height="50" rx="12" fill="#1f2937"/>
+  <text x="78" y="306" fill="#e5e7eb" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="14">Cat Café Runtime</text>
+  <text x="78" y="323" fill="#9ca3af" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="11">2 个工作项</text>
+
+  <rect x="58" y="344" width="206" height="50" rx="12" fill="#1f2937"/>
+  <text x="78" y="368" fill="#e5e7eb" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="14">Personal Ops</text>
+  <text x="78" y="385" fill="#9ca3af" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="11">1 个工作项</text>
+
+  <rect x="58" y="800" width="206" height="42" rx="12" fill="#374151"/>
+  <text x="96" y="826" fill="#f9fafb" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="14">+ 新建项目</text>
+
+  <!-- Top bar -->
+  <rect x="286" y="28" width="1118" height="78" rx="18" fill="#ffffff"/>
+  <text x="322" y="76" class="text h1">WorkEventAgent</text>
+  <text x="540" y="76" class="dim body">项目工作地图</text>
+
+  <rect x="805" y="48" width="240" height="34" rx="10" fill="#f3f4f6" stroke="#e5e7eb"/>
+  <text x="824" y="70" class="faint small">搜索项目、工作项、任务...</text>
+
+  <rect x="1060" y="48" width="96" height="34" rx="10" class="primary-soft"/>
+  <text x="1086" y="70" class="text small" font-weight="700">今日 5</text>
+
+  <rect x="1168" y="48" width="102" height="34" rx="10" class="amber-soft"/>
+  <text x="1191" y="70" class="text small" font-weight="700">待确认 3</text>
+
+  <rect x="1286" y="44" width="84" height="42" rx="12" class="primary"/>
+  <text x="1310" y="70" fill="#ffffff" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="14" font-weight="700">记录</text>
+
+  <!-- Main nav: no Timeline tab -->
+  <rect x="322" y="124" width="716" height="46" rx="12" class="muted-panel"/>
+  <rect x="332" y="132" width="112" height="30" rx="9" class="primary"/>
+  <text x="361" y="152" fill="#ffffff" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="13" font-weight="700">工作地图</text>
+  <text x="472" y="152" class="dim small">报表</text>
+  <text x="548" y="152" class="dim small">搜索</text>
+  <text x="624" y="152" class="dim small">收件箱</text>
+  <text x="714" y="152" class="faint small">时间线不作为项目页入口</text>
+
+  <!-- Work map column -->
+  <text x="322" y="209" class="text h2">工作项</text>
+  <text x="394" y="209" class="dim body">围绕当前项目推进，任务可直接勾选完成</text>
+
+  <!-- Work item card 1 -->
+  <rect x="322" y="232" width="716" height="176" rx="12" class="panel"/>
+  <rect x="346" y="255" width="8" height="26" rx="4" class="primary"/>
+  <text x="368" y="275" class="text h2">优化前端体验</text>
+  <rect x="868" y="252" width="70" height="28" rx="14" class="primary-soft"/>
+  <text x="887" y="271" class="text small" font-weight="700">2/5</text>
+  <rect x="950" y="252" width="64" height="28" rx="9" fill="#f3f4f6" stroke="#e5e7eb"/>
+  <text x="967" y="271" class="dim small">+ 任务</text>
+
+  <rect x="368" y="304" width="18" height="18" rx="5" fill="#ffffff" stroke="#98a2b3"/>
+  <text x="398" y="319" class="text body">任务列表改成 checkbox 交互</text>
+  <rect x="368" y="333" width="18" height="18" rx="5" fill="#16a34a"/>
+  <path d="M372 342 l4 4 l8 -10" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="398" y="348" class="dim body" text-decoration="line-through">弱化项目页时间线</text>
+  <rect x="368" y="362" width="18" height="18" rx="5" fill="#ffffff" stroke="#98a2b3"/>
+  <text x="398" y="377" class="text body">统一命名：项目 / 工作项 / 任务</text>
+
+  <!-- Work item card 2 -->
+  <rect x="322" y="424" width="716" height="154" rx="12" class="panel"/>
+  <rect x="346" y="447" width="8" height="26" rx="4" class="amber"/>
+  <text x="368" y="467" class="text h2">快捷获取稳定性</text>
+  <rect x="868" y="444" width="70" height="28" rx="14" class="green-soft"/>
+  <text x="887" y="463" class="text small" font-weight="700">4/4</text>
+  <rect x="368" y="497" width="18" height="18" rx="5" fill="#16a34a"/>
+  <path d="M372 506 l4 4 l8 -10" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="398" y="512" class="dim body" text-decoration="line-through">支持连续输入</text>
+  <rect x="368" y="526" width="18" height="18" rx="5" fill="#16a34a"/>
+  <path d="M372 535 l4 4 l8 -10" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="398" y="541" class="dim body" text-decoration="line-through">确认后主界面刷新</text>
+
+  <!-- Work item card 3 -->
+  <rect x="322" y="594" width="716" height="154" rx="12" class="panel"/>
+  <rect x="346" y="617" width="8" height="26" rx="4" class="green"/>
+  <text x="368" y="637" class="text h2">搜索回到工作现场</text>
+  <rect x="868" y="614" width="70" height="28" rx="14" class="primary-soft"/>
+  <text x="887" y="633" class="text small" font-weight="700">0/3</text>
+  <rect x="368" y="667" width="18" height="18" rx="5" fill="#ffffff" stroke="#98a2b3"/>
+  <text x="398" y="682" class="text body">搜索结果打开对应工作项</text>
+  <rect x="368" y="696" width="18" height="18" rx="5" fill="#ffffff" stroke="#98a2b3"/>
+  <text x="398" y="711" class="text body">命中任务高亮 3 秒</text>
+
+  <!-- Quick capture bar -->
+  <rect x="322" y="786" width="716" height="54" rx="14" fill="#f9fafc" stroke="#dfe3ea"/>
+  <text x="348" y="819" class="faint body">快速记录进展... Enter 提交，后台解析到收件箱</text>
+  <rect x="934" y="798" width="78" height="30" rx="10" class="primary"/>
+  <text x="958" y="818" fill="#fff" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="13" font-weight="700">提交</text>
+
+  <!-- Today side entry / light panel -->
+  <rect x="1070" y="124" width="300" height="716" rx="16" class="muted-panel"/>
+  <text x="1098" y="165" class="text h2">今日入口</text>
+  <text x="1182" y="165" class="dim body">不是首页主体</text>
+
+  <rect x="1098" y="190" width="244" height="74" rx="12" class="panel"/>
+  <text x="1118" y="219" class="text body" font-weight="700">待确认捕获</text>
+  <text x="1118" y="242" class="dim small">3 条 AI 解析结果等待确认</text>
+  <circle cx="1318" cy="226" r="14" class="amber"/>
+  <text x="1314" y="231" fill="#fff" font-family="Segoe UI, Arial" font-size="13" font-weight="700">3</text>
+
+  <rect x="1098" y="280" width="244" height="86" rx="12" class="panel"/>
+  <text x="1118" y="309" class="text body" font-weight="700">今天建议关注</text>
+  <text x="1118" y="332" class="dim small">8 个未完成任务</text>
+  <text x="1118" y="350" class="faint tiny">点开后跳转到工作地图对应位置</text>
+
+  <rect x="1098" y="382" width="244" height="86" rx="12" class="panel"/>
+  <text x="1118" y="411" class="text body" font-weight="700">报表</text>
+  <text x="1118" y="434" class="dim small">日报 / 周报从底层记录生成</text>
+  <text x="1118" y="452" class="faint tiny">不要求用户浏览时间线</text>
+
+  <rect x="1098" y="500" width="244" height="120" rx="12" fill="#ffffff" stroke="#dfe3ea" stroke-dasharray="6 5"/>
+  <text x="1118" y="530" class="text body" font-weight="700">设计原则</text>
+  <text x="1118" y="556" class="dim small">项目页 = 当前状态</text>
+  <text x="1118" y="579" class="dim small">Timeline = 底层日志</text>
+  <text x="1118" y="602" class="dim small">报表 / 搜索 / 纠错才使用</text>
+
+  <rect x="1098" y="760" width="244" height="44" rx="12" fill="#111827"/>
+  <text x="1146" y="788" fill="#ffffff" font-family="Microsoft YaHei, Segoe UI, Arial" font-size="14" font-weight="700">打开 Today 工作台</text>
+</svg>

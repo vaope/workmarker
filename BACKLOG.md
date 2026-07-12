@@ -15,6 +15,7 @@ created: 2026-06-29
 |----|------|--------|-------|------|
 | F001 | WorkEventAgent Vision and MVP | spec | @cat-tv94q87o | [docs/features/F001-workeventagent-vision.md](docs/features/F001-workeventagent-vision.md) |
 | F002 | Chinese project document headings with stable section anchors | idea | @cat-tv94q87o | TBD |
+| F004 | Project work map and unified capture | spec | @cat-z8iqdgtj | [docs/designs/F004-work-map.md](docs/designs/F004-work-map.md) |
 
 ## Completed
 

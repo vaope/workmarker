@@ -7,6 +7,8 @@ created: 2026-07-01
 
 # F001 WorkEventAgent 客户端架构与接口契约
 
+> 演进说明（2026-07-12）：F004 的项目 Work Map、主窗口 Inbox 捕获和 Today 入口以 `docs/designs/F004-work-map.md` 为产品真相源；本文定义的 Python/IPC/存储边界继续有效。
+
 > 本文件是客户端实现的单一真相源。Python backend 由金哥实现，Electron 前端由砚砚实现，双方照此契约对齐。
 > 真相源优先级：本文件定义接口边界；`docs/designs/F001-client-ux-spec.md` 定义交互细节；`docs/WORKLOG_SCHEMA.md` 定义文档写入协议。
 
