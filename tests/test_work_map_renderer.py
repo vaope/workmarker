@@ -112,3 +112,16 @@ def test_main_composer_transfers_attachment_ownership_after_durable_create() -> 
     create_failure_branch = submit[create_idx:clear_idx]
     assert "if (!created || !created.ok || !created.card)" in create_failure_branch
     assert "return;" in create_failure_branch
+
+
+def test_today_summary_uses_existing_task_and_inbox_data() -> None:
+    html = Path("client/windows/main.html").read_text(encoding="utf-8")
+    source = Path("client/windows/main.js").read_text(encoding="utf-8")
+    assert 'id="today-rail"' in html
+    assert 'id="today-pending-count"' in html
+    assert 'id="today-open-count"' in html
+    assert "card.state === 'needs_confirmation'" in source
+    assert "task.status === 'in_progress'" in source
+    assert "switchView('inbox')" in source
+    assert "switchView('reports')" in source
+    assert "wea.listCaptures()" in source

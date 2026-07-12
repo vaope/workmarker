@@ -27,6 +27,7 @@
     <!-- 左栏：项目库 -->
     <aside class="sidebar">
       <div class="sidebar-head"><span class="brand">项目库</span></div>
+      <button id="sidebar-today" class="sidebar-today ghost block" type="button">今日</button>
       <ul id="project-list" class="project-list"></ul>
       <div class="sidebar-foot">
         <button id="new-project" class="ghost block">+ 新建项目</button>
@@ -35,7 +36,13 @@
     </aside>
 
     <!-- 右栏：工作视图 -->
-    <main class="content">
+    <div class="workspace-shell">
+      <div class="top-actions">
+        <button id="today-focus" class="top-action" type="button">今日</button>
+        <button id="pending-focus" class="top-action pending" type="button">待确认 <span id="pending-badge">0</span></button>
+        <button id="quick-record-focus" class="primary" type="button">记录</button>
+      </div>
+      <main class="content">
       <!-- 纠错恢复横幅（有未完成的跨项目纠错时显示） -->
       <div id="recovery-banner" class="recovery-banner hidden">
         <span class="recovery-icon">⚠️</span>
@@ -124,6 +131,20 @@
         <div id="composer-status" class="composer-status"></div>
       </footer>
     </main>
+
+    <aside id="today-rail" class="today-rail" aria-label="今日摘要" tabindex="-1">
+      <div class="today-head"><strong>今日入口</strong><span>不是首页主体</span></div>
+      <button id="today-pending" class="today-card" type="button">
+        <strong>待确认捕获</strong><span><b id="today-pending-count">0</b> 条等待确认</span>
+      </button>
+      <button id="today-open" class="today-card" type="button">
+        <strong>当前项目待推进</strong><span><b id="today-open-count">0</b> 个未完成任务</span>
+      </button>
+      <button id="today-reports" class="today-card" type="button">
+        <strong>报表</strong><span>日报 / 周报从底层记录生成</span>
+      </button>
+    </aside>
+  </div>
   </div>
 
   <!-- 项目初始化模态 -->

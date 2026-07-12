@@ -7,6 +7,7 @@ const state = {
   currentProject: null, // {project_id, title, path}
   tasksData: null,      // {items:[{item_id,title,tasks:[...]}]}
   pending: [],          // [{tempPath, filename}]
+  inboxCards: [],       // Inbox cards for Today summary
   view: 'tasks',
   busy: false,
   manualMode: null,     // "item" | "task"
@@ -28,6 +29,7 @@ async function boot() {
   wea.onInboxUpdated(() => {
     if (state.currentProject) refreshCurrent();
     if (state.view === 'inbox') loadInbox();
+    refreshActionSummary();
   });
   loadReportSchedule();
   // Check for unfinished cross-project corrections on startup
@@ -125,6 +127,18 @@ function bindStaticHandlers() {
 
   // recovery banner dismiss (bound once; handler reads dynamic state)
   $('#recovery-dismiss').addEventListener('click', hideRecoveryBanner);
+
+  // today rail
+  $('#today-focus').addEventListener('click', focusTodayRail);
+  $('#sidebar-today').addEventListener('click', focusTodayRail);
+  $('#pending-focus').addEventListener('click', () => switchView('inbox'));
+  $('#today-pending').addEventListener('click', () => switchView('inbox'));
+  $('#today-open').addEventListener('click', () => {
+    switchView('tasks');
+    $('#tasks-body').scrollTop = 0;
+  });
+  $('#today-reports').addEventListener('click', () => switchView('reports'));
+  $('#quick-record-focus').addEventListener('click', () => $('#composer-input').focus());
 }
 
 // ---- projects ------------------------------------------------------------
@@ -185,6 +199,7 @@ async function refreshCurrent() {
   // refresh sidebar counts quietly
   const fresh = await wea.listProjects();
   if (fresh && fresh.ok) { state.projects = fresh.projects; renderProjectList(state.projects); }
+  renderActionSummary();
 }
 
 function switchView(view) {
@@ -367,6 +382,34 @@ function bindInboxActions() {
   document.querySelectorAll('.inbox-retry').forEach(function(btn) { btn.addEventListener('click', async function() { btn.textContent = '...'; btn.disabled = true; await wea.processCapture(btn.dataset.id); loadInbox(); }); });
   document.querySelectorAll('.inbox-cancel').forEach(function(btn) { btn.addEventListener('click', async function() { btn.textContent = '...'; btn.disabled = true; await wea.cancelCapture(btn.dataset.id); loadInbox(); }); });
   document.querySelectorAll('.inbox-open').forEach(function(btn) { btn.addEventListener('click', function() { var proj = state.projectList.find(function(p) { return p.path === btn.dataset.path; }); if (proj) selectProject(proj); }); });
+}
+
+// ---- today summary ---------------------------------------------------------
+
+async function refreshActionSummary() {
+  try {
+    const result = await wea.listCaptures();
+    state.inboxCards = result && result.ok ? (result.cards || []) : [];
+  } catch (_) {
+    state.inboxCards = [];
+  }
+  renderActionSummary();
+}
+
+function renderActionSummary() {
+  const pending = (state.inboxCards || []).filter((card) => card.state === 'needs_confirmation').length;
+  const open = ((state.tasksData && state.tasksData.items) || [])
+    .flatMap((item) => item.tasks || [])
+    .filter((task) => task.status === 'in_progress').length;
+  $('#today-pending-count').textContent = String(pending);
+  $('#pending-badge').textContent = String(pending);
+  $('#today-open-count').textContent = String(open);
+}
+
+function focusTodayRail() {
+  const rail = $('#today-rail');
+  rail.classList.toggle('open');
+  rail.focus({ preventScroll: true });
 }
 
 // ---- inline edit / delete helpers ----------------------------------------
@@ -601,7 +644,8 @@ async function submitUpdate() {
     await wea.discardPending(pending.map((attachment) => attachment.tempPath)).catch(() => {});
     setStatus('已加入收件箱，正在后台解析');
     input.focus();
-    if (state.view === 'inbox') await loadInbox();
+    await refreshActionSummary();
+    if (state.view === 'inbox') renderInbox();
     processMainCaptureInBackground(captureId);
   } catch (error) {
     setStatus(`创建收件箱记录出错：${error.message || error}`, 'error');
@@ -611,10 +655,9 @@ async function submitUpdate() {
 }
 
 function processMainCaptureInBackground(captureId) {
-  wea.processCapture(captureId).then(async () => {
-    if (state.view === 'inbox') await loadInbox();
-  }).catch(async () => {
-    if (state.view === 'inbox') await loadInbox();
+  wea.processCapture(captureId).finally(async () => {
+    await refreshActionSummary();
+    if (state.view === 'inbox') renderInbox();
   });
 }
 
