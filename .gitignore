@@ -10,6 +10,7 @@ __pycache__/
 client/node_modules/
 
 # Agent workspaces (local state)
+.worktrees/
 .cat-cafe/
 .claude/
 .codex/
