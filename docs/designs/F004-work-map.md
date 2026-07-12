@@ -32,6 +32,7 @@ The co-creator confirmed these decisions in the F004 discussion:
 5. The default main view is the current project's work map.
 6. Today is a light top/side entry, not the main page.
 7. The visual direction in `docs/mockups/F004-work-map-today-entry.svg` is approved.
+8. Checkbox completion is intentionally not reportable history: a task checked off without a captured update will not appear as completed work in daily or weekly reports.
 
 ## Product Model and User-Facing Language
 
@@ -130,6 +131,8 @@ Rules:
 
 This is deliberately different from an archived progress update. If the user wants a completion explanation to appear in a report, they record a progress update through capture.
 
+The UI must make this consequence visible in plain language where completion is introduced: checking a task changes the current Work Map only; reportable work still comes from captured updates.
+
 ## Unified Capture
 
 The main-window composer must use the same durable F003 Inbox lifecycle as quick capture:
@@ -222,7 +225,7 @@ The approved mockup is the information-architecture reference, not a pixel-perfe
 
 ## Risks and Mitigations
 
-- **Reports may miss lightweight completion actions.** This is intentional: checkbox changes express current state; captured updates express reportable work. The UI copy must not imply the checkbox archives a work event.
+- **Reports may miss lightweight completion actions.** This is intentional and co-creator-visible: checkbox changes express current state; captured updates express reportable work. The UI copy must state that checking a task will not add an item to daily or weekly reports.
 - **Removing the Timeline tab can hide correction entry points.** Preserve Search/Inbox correction paths and backend APIs; F005 will improve direct navigation.
 - **Inbox unification can lose attachments if ownership is unclear.** Clear `state.pending` only after `inbox_create` succeeds and copies files into the durable pending directory.
 - **Rapid checkbox clicks can race.** Disable the control until the write and refresh complete.
