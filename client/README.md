@@ -44,13 +44,18 @@ ls node_modules/electron/dist/electron.exe   # 应为 ~188MB
 
 ## 功能
 
-- **双栏主窗口**：左侧项目库（项目名/未完成任务数/更新时间），右侧任务视图 + 时间线视图 + 报告视图切换，底部常驻输入条
-- **快速捕获浮窗**：全局热键 `Ctrl+Shift+Space` 唤起，独立于主窗口；热键可在左下角设置中修改
-- **报告生成**：支持日报/周报/自定义日期范围/项目总结，报告可持久化到 `<workspace>/reports/`
-- **定时报告**：日报和周报可按设定的时间自动生成（仅应用/托盘运行时）
-- **粘贴图片**：`Ctrl+V` 粘贴剪贴板图片，归档为附件（图片不送 LLM，仅按路径归档）
-- **确认卡片**：确认 / 编辑 / 取消；低置信度（<70%）下拉修正，不绕过确认
+- **工作地图（主界面）**：项目 → 工作项 → 任务三层结构，任务 checkbox 直接勾选完成
+- **今日摘要（侧栏）**：待确认捕获数 + 当前项目待推进任务数，一键跳转
+- **收件箱优先捕获**：主窗口和快速捕获都先进收件箱，后台 opencode 解析，不阻塞连续输入
+- **项目库左栏**：项目列表及未完成任务数
+- **报告 / 搜索 / 收件箱**：独立 tab 切换
+- **快速捕获浮窗**：全局热键 `Ctrl+Shift+Space` 唤起
+- **报告生成**：日报/周报/自定义日期范围/项目总结，可持久化到 `<workspace>/reports/`
+- **定时报告**：日报和周报可按设定的时间自动生成
+- **粘贴图片**：`Ctrl+V` 粘贴剪贴板图片，归档为附件
 - **项目初始化表单**：左下角「+ 新建项目」
+
+> 说明：checkbox 勾选只改任务当前状态，**不写入时间线，也不会出现在日报/周报中**。要进报表必须走捕获（capture）。时间线数据仍保留给搜索、纠错和审计。
 
 ## Reports
 
@@ -69,7 +74,7 @@ Manual reports support explicit `date_from` and `date_to` values.
 
 ## 已验证
 
-- 121 Python tests 全绿（含 backend 命令 + registry + timeline 解析 + 报告生成 + 本地时间过滤）
+- 180 Python tests 全绿（含 backend 命令 + registry + timeline 解析 + 报告生成 + 本地时间过滤 + Work Map renderer + 捕获路径）
 - 真实 opencode 端到端归档闭环（init → propose → commit → timeline，Markdown + SQLite 真实写入）
 - electron v33 启动 smoke test 无崩溃（主进程加载窗口 + 托盘 + 全局热键）
 
