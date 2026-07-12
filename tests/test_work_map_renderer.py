@@ -88,3 +88,27 @@ def test_main_window_uses_confirmed_hierarchy_labels() -> None:
     assert "任务名称" in combined
     assert "删除需求" not in combined
     assert "所属需求" not in combined
+
+
+def test_main_composer_uses_durable_inbox_not_single_proposal() -> None:
+    source = Path("client/windows/main.js").read_text(encoding="utf-8")
+    submit = source[source.index("async function submitUpdate"):source.index("// ---- in-app delete confirm")]
+    assert "wea.createCapture(text, pending)" in submit
+    assert "wea.processCapture(captureId)" in source
+    assert "wea.propose(" not in submit
+    assert "state.proposal" not in source
+    assert "state.pending = []" in submit
+    assert "wea.discardPending" in submit
+
+
+def test_main_composer_transfers_attachment_ownership_after_durable_create() -> None:
+    source = Path("client/windows/main.js").read_text(encoding="utf-8")
+    submit = source[source.index("async function submitUpdate"):source.index("// ---- in-app delete confirm")]
+    assert "const pending = state.pending.slice();" in submit
+    create_idx = submit.index("const created = await wea.createCapture(text, pending);")
+    clear_idx = submit.index("state.pending = [];")
+    discard_idx = submit.index("wea.discardPending(pending.map((attachment) => attachment.tempPath))")
+    assert create_idx < clear_idx < discard_idx
+    create_failure_branch = submit[create_idx:clear_idx]
+    assert "if (!created || !created.ok || !created.card)" in create_failure_branch
+    assert "return;" in create_failure_branch

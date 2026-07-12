@@ -7,7 +7,6 @@ const state = {
   currentProject: null, // {project_id, title, path}
   tasksData: null,      // {items:[{item_id,title,tasks:[...]}]}
   pending: [],          // [{tempPath, filename}]
-  proposal: null,       // proposal awaiting confirmation
   view: 'tasks',
   busy: false,
   manualMode: null,     // "item" | "task"
@@ -582,25 +581,41 @@ function renderThumbs() {
 
 async function submitUpdate() {
   if (state.busy) return;
-  const text = $('#composer-input').value.trim();
+  const input = $('#composer-input');
+  const text = input.value.trim();
   if (!text) { setStatus('请输入进展内容', 'error'); return; }
-  if (!state.currentProject) { setStatus('请先选择或新建一个项目', 'error'); return; }
+  const pending = state.pending.slice();
   state.busy = true;
-  setStatus('正在归档…正在调用 opencode 解析（约 10 秒）', 'loading');
+  setStatus('正在加入收件箱…', 'loading');
   try {
-    const res = await wea.propose(text, state.currentProject.path, state.pending.map((p) => p.tempPath));
-    if (!res || !res.ok) {
-      setStatus(`解析失败：${(res && res.error) || '后端未就绪'}`, 'error');
+    const created = await wea.createCapture(text, pending);
+    if (!created || !created.ok || !created.card) {
+      setStatus(`创建收件箱记录失败：${(created && created.error) || '后端未就绪'}`, 'error');
       return;
     }
-    state.proposal = res.proposal;
-    setStatus('');
-    renderConfirmCard(res.proposal, !!res.low_confidence);
-  } catch (err) {
-    setStatus(`出错：${err.message || err}`, 'error');
+    const captureId = created.card.capture_id;
+    input.value = '';
+    input.style.height = 'auto';
+    state.pending = [];
+    renderThumbs();
+    await wea.discardPending(pending.map((attachment) => attachment.tempPath)).catch(() => {});
+    setStatus('已加入收件箱，正在后台解析');
+    input.focus();
+    if (state.view === 'inbox') await loadInbox();
+    processMainCaptureInBackground(captureId);
+  } catch (error) {
+    setStatus(`创建收件箱记录出错：${error.message || error}`, 'error');
   } finally {
     state.busy = false;
   }
+}
+
+function processMainCaptureInBackground(captureId) {
+  wea.processCapture(captureId).then(async () => {
+    if (state.view === 'inbox') await loadInbox();
+  }).catch(async () => {
+    if (state.view === 'inbox') await loadInbox();
+  });
 }
 
 // ---- in-app delete confirm (replaces native confirm() — avoids OS focus loss in Electron) ----
@@ -636,93 +651,11 @@ function commitDeleteConfirm() {
   if (cb) cb();
 }
 
-// ---- confirm card (archival) -----------------------------------------------
-function renderConfirmCard(proposal, lowConf) {
-  const card = $('#confirm-card');
-  const t = proposal.target;
-  const e = proposal.event;
-  const conf = Math.round((proposal.confidence || 0) * 100);
-  const allTasks = collectTaskOptions();
-
-  const taskSelect = lowConf
-    ? `<select id="cc-task">
-         ${allTasks.map((o) => `<option value="${esc(o.task_id)}" ${o.task_id === t.task_id ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}
-       </select>`
-    : `<span class="v">${esc(taskLabel(t.task_id) || t.task_id)}</span>`;
-
-  card.innerHTML =
-    `<div class="cc-head">
-       <h3>归档预览</h3>
-       <span class="cc-conf ${lowConf ? 'low' : 'high'}">置信度 ${conf}%</span>
-     </div>` +
-    (lowConf ? '<div class="cc-warn">不太确定归到哪个任务，请确认或下拉修正。</div>' : '') +
-    `<div class="cc-grid">
-       <span class="k">项目</span><span class="v">${esc(state.currentProject.title || t.project_id)}</span>
-       <span class="k">任务</span>${taskSelect}
-       <span class="k">状态</span>
-       <select id="cc-status">
-         <option value="in_progress" ${e.status === 'in_progress' ? 'selected' : ''}>进行中</option>
-         <option value="done" ${e.status === 'done' ? 'selected' : ''}>已完成</option>
-       </select>
-       <span class="k">摘要</span><input id="cc-summary" value="${esc(e.summary)}" />
-       <span class="k">下一步</span><input id="cc-next" value="${esc(e.next_action)}" />
-       ${state.pending.length ? `<span class="k">附件</span><span class="v">${state.pending.map((p) => esc(p.filename)).join(', ')}</span>` : ''}
-     </div>
-     <div class="cc-actions">
-       <button class="ghost" id="cc-cancel">取消</button>
-       <button class="primary" id="cc-confirm">确认归档</button>
-     </div>`;
-  card.classList.remove('hidden');
-
-  $('#cc-cancel').addEventListener('click', hideConfirmCard);
-  $('#cc-confirm').addEventListener('click', commitProposal);
-}
-
-function collectTaskOptions() {
-  const out = [];
-  const items = (state.tasksData && state.tasksData.items) || [];
-  items.forEach((it) => (it.tasks || []).forEach((tk) =>
-    out.push({ task_id: tk.task_id, label: `${it.title} / ${tk.title}` })));
-  return out;
-}
-function taskLabel(taskId) {
-  const o = collectTaskOptions().find((x) => x.task_id === taskId);
-  return o ? o.label : '';
-}
-
+// ---- confirm card (delete confirmation only; archival uses inbox) --------
 function hideConfirmCard() {
   $('#confirm-card').classList.add('hidden');
-  state.proposal = null;
   _deleteCallback = null;
   if (_deleteEscHandler) { document.removeEventListener('keydown', _deleteEscHandler); _deleteEscHandler = null; }
-}
-
-async function commitProposal() {
-  if (!state.proposal) return;
-  const p = JSON.parse(JSON.stringify(state.proposal));
-  // apply edits
-  const taskSel = $('#cc-task');
-  if (taskSel) { p.target.task_id = taskSel.value; p.event.task_id = taskSel.value; }
-  p.event.status = $('#cc-status').value;
-  p.event.summary = $('#cc-summary').value;
-  p.event.next_action = $('#cc-next').value;
-
-  setStatus('正在写入…', 'loading');
-  try {
-    const res = await wea.commit(p, state.currentProject.path, state.pending);
-    if (!res || !res.ok) { setStatus(`写入失败：${(res && res.error) || '未知错误'}`, 'error'); return; }
-    // cleanup
-    hideConfirmCard();
-    $('#composer-input').value = '';
-    autoGrow();
-    state.pending = [];
-    renderThumbs();
-    setStatus('');
-    toast('✅ 已归档', 'ok');
-    await refreshCurrent();
-  } catch (err) {
-    setStatus(`出错：${err.message || err}`, 'error');
-  }
 }
 
 // ---- manual item/task creation -------------------------------------------
