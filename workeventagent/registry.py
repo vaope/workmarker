@@ -3,6 +3,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from workeventagent.project_schema import parse_frontmatter
+from workeventagent.work_map_store import parse_work_map
+
 
 def scan_workspace(workspace: Path) -> list[dict]:
     """Scan workspace for work_project Markdown files.
@@ -21,7 +24,7 @@ def scan_workspace(workspace: Path) -> list[dict]:
         except (OSError, UnicodeDecodeError):
             continue
 
-        fm = _parse_frontmatter(text)
+        fm = parse_frontmatter(text)
         if fm.get("doc_kind") != "work_project":
             continue
 
@@ -43,39 +46,15 @@ def scan_workspace(workspace: Path) -> list[dict]:
     return projects
 
 
-def _parse_frontmatter(text: str) -> dict[str, str]:
-    if not text.startswith("---"):
-        return {}
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return {}
-    fm: dict[str, str] = {}
-    for line in parts[1].splitlines():
-        line = line.strip()
-        if ":" not in line:
-            continue
-        key, _, value = line.partition(":")
-        fm[key.strip()] = value.strip()
-    return fm
-
-
 def _count_open_tasks(text: str) -> int:
-    """Count tasks with status: in_progress in the Work Map section."""
+    """Count tasks with status in_progress in the Work Map section."""
     count = 0
-    in_work_map = False
-    status_re = re.compile(r"^-\s*status:\s*(.*)$")
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped == "## Work Map":
-            in_work_map = True
-            continue
-        if in_work_map and stripped.startswith("## ") and stripped != "## Work Map":
-            break
-
-        if in_work_map:
-            m = status_re.match(line)
-            if m and m.group(1).strip() == "in_progress":
+    try:
+        items = parse_work_map(text)
+    except ValueError:
+        return 0
+    for item in items:
+        for task in item.get("tasks", []):
+            if task.get("status") == "in_progress":
                 count += 1
-
     return count

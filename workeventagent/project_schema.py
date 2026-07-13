@@ -190,20 +190,28 @@ def parse_timeline_events(text: str) -> list[dict]:
 # ── Attachment parser ───────────────────────────────────────
 
 _ATTACHMENT_LINE_RE = re.compile(r"^-\s+(\S+)\s*<!--\s*attachment:(.+?)\s*-->")
+_V1_ATTACH_TS_RE = re.compile(r"^-\s+(\d{4}-\d{2}-\d{2}T.+)$")
 
 
 def parse_attachment_records(text: str) -> list[dict]:
-    """Parse the Attachments section into a list of attachment records."""
+    """Parse the Attachments section into a list of attachment records.
+
+    Handles both v1 format (timestamp line + indented fields) and
+    v2 format (path with anchor comment).
+    """
     section = find_section(text, "attachments")
     body = text[section.content_start:section.content_end]
     records: list[dict] = []
     current: dict | None = None
+    in_v1_mode = False
+    current_v1_key: str | None = None
 
     for line in body.splitlines():
         stripped = line.strip()
         if stripped.startswith("## "):
             break
 
+        # v2: anchored attachment line
         att_match = _ATTACHMENT_LINE_RE.match(line)
         if att_match:
             if current:
@@ -212,9 +220,35 @@ def parse_attachment_records(text: str) -> list[dict]:
                 "path": att_match.group(1).strip(),
                 "attachment_id": att_match.group(2).strip(),
             }
+            in_v1_mode = False
+            current_v1_key = None
             continue
 
-        if current is not None:
+        # v1: timestamp line starts a new attachment record
+        ts_match = _V1_ATTACH_TS_RE.match(line)
+        if ts_match:
+            if current:
+                records.append(current)
+            current = {"timestamp": ts_match.group(1).strip(), "path": ""}
+            in_v1_mode = True
+            current_v1_key = None
+            continue
+
+        # v1: indented fields
+        if in_v1_mode and current is not None:
+            kv_match = _SUB_KV_RE.match(line)
+            if kv_match:
+                current_v1_key = kv_match.group(1).strip()
+                current[current_v1_key] = kv_match.group(2).strip()
+                continue
+            if current_v1_key and line.startswith("    "):
+                current[current_v1_key] = (
+                    current.get(current_v1_key, "") + "\n" + line[4:].rstrip()
+                )
+            continue
+
+        # v2: key-value fields
+        if not in_v1_mode and current is not None:
             kv_match = _SUB_KV_RE.match(line)
             if kv_match:
                 current[kv_match.group(1).strip()] = kv_match.group(2).strip()

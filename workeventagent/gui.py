@@ -21,6 +21,13 @@ from pathlib import Path
 
 from workeventagent.ids import make_event_id, make_stable_id, make_unique_stable_id
 from workeventagent.index_store import init_db, rebuild_index
+from workeventagent.project_schema import (
+    parse_timeline_events,
+    parse_attachment_records,
+    find_section,
+    section_content,
+)
+from workeventagent.work_map_store import parse_work_map
 from workeventagent.inbox_store import (
     archive_capture,
     cancel_capture,
@@ -328,10 +335,8 @@ def handle_tasks(request: dict) -> dict:
     fm = _parse_frontmatter(text)
     project_id = fm.get("project_id", "")
     title = fm.get("title", "")
-
-    work_map_items = _parse_work_map_items(text)
-    work_map_tasks = _parse_work_map_tasks(text)
-    timeline_events = _parse_timeline_events(text)
+    items = parse_work_map(text)
+    timeline_events = parse_timeline_events(text)
 
     # Build task_id → latest timestamp map
     task_updated: dict[str, str] = {}
@@ -341,36 +346,10 @@ def handle_tasks(request: dict) -> dict:
         if tid and ts and tid not in task_updated:
             task_updated[tid] = ts
 
-    # Group tasks by item
-    items_map: dict[str, dict] = {
-        item["item_id"]: {
-            "item_id": item["item_id"],
-            "title": item["title"],
-            "background": item.get("background", ""),
-            "tasks": [],
-        }
-        for item in work_map_items
-    }
-    for wt in work_map_tasks:
-        item_id = wt["item_id"]
-        if item_id not in items_map:
-            items_map[item_id] = {"item_id": item_id, "title": wt.get("item_title", ""), "tasks": []}
-        items_map[item_id]["tasks"].append({
-            "task_id": wt["task_id"],
-            "title": wt["title"],
-            "status": wt["status"],
-            "next_action": wt["next_action"],
-            "last_event_id": wt["last_event_id"],
-            "updated_at": task_updated.get(wt["task_id"], ""),
-        })
-
-    # Preserve original item order from Work Map
-    item_order: list[str] = [item["item_id"] for item in work_map_items]
-    for wt in work_map_tasks:
-        if wt["item_id"] not in item_order:
-            item_order.append(wt["item_id"])
-
-    items = [items_map[iid] for iid in item_order if iid in items_map]
+    # Add updated_at to each task from timeline events
+    for item in items:
+        for task in item.get("tasks", []):
+            task["updated_at"] = task_updated.get(task["task_id"], "")
 
     return {"ok": True, "project_id": project_id, "title": title, "items": items}
 
@@ -381,7 +360,7 @@ def handle_timeline(request: dict) -> dict:
     project_path = Path(request["project_path"])
     text = project_path.read_text(encoding="utf-8")
 
-    events = _parse_timeline_events(text)
+    events = parse_timeline_events(text)
     work_map_tasks = _parse_work_map_tasks(text)
     attachment_task_ids = _parse_attachments_task_ids(text)
 
@@ -1453,14 +1432,14 @@ def _build_project_route_context(projects: list[dict]) -> str:
             lines.append("")
             continue
 
-        for item in _parse_work_map_items(text):
+        for item in parse_work_map(text):
             lines.append(f"- item: {item['title']} ({item['item_id']})")
-        for task in _parse_work_map_tasks(text)[:20]:
-            next_action = task.get("next_action", "")
-            lines.append(
-                f"  - task: {task['title']} ({task['task_id']}), "
-                f"status={task.get('status', '')}, next_action={next_action}"
-            )
+            for task in item.get("tasks", [])[:20]:
+                next_action = task.get("next_action", "")
+                lines.append(
+                    f"  - task: {task['title']} ({task['task_id']}), "
+                    f"status={task.get('status', '')}, next_action={next_action}"
+                )
         lines.append("")
     return "\n".join(lines)
 

@@ -622,6 +622,7 @@ class ProjectsTest(unittest.TestCase):
             (workspace / "proj-a.md").write_text(
                 "---\nproject_id: proj-a\ntitle: Project A\ndoc_kind: work_project\nupdated: 2026-07-01\n---\n"
                 "## Work Map\n"
+                "### Item: Tasks <!-- item:tasks -->\n"
                 "#### Task: t1 <!-- task:t1 -->\n- status: in_progress\n- next_action: go\n- last_event_id: \n",
                 encoding="utf-8",
             )
@@ -2153,6 +2154,62 @@ class SearchHandlerTests(unittest.TestCase):
             result = handle_search({"workspace": str(ws), "query": "Search Test Project"})
             self.assertTrue(result["ok"])
             self.assertTrue(any("Search Test Project" in r.get("title", "") for r in result["results"]))
+
+
+class V2ProjectReadTest(unittest.TestCase):
+    """All existing read paths must understand schema v2."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ws = Path(self.tmp.name)
+        self.db = self.ws / "index.sqlite"
+        init_db(self.db)
+        self.project = self.ws / "report-project.md"
+        self.project.write_text(
+            Path("tests/fixtures/project-v2.md").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_v2_project_is_readable_by_projects(self):
+        result = handle_projects({"workspace": str(self.ws)})
+        self.assertTrue(result["ok"])
+        projects = result["projects"]
+        self.assertTrue(any(p["project_id"] == "report-project" for p in projects))
+        v2_project = next(p for p in projects if p["project_id"] == "report-project")
+        self.assertEqual(v2_project["open_task_count"], 2)
+
+    def test_v2_tasks_uses_typed_work_map_state(self):
+        result = handle_tasks({"project_path": str(self.project)})
+        items = result["items"]
+        self.assertEqual(len(items), 2)
+        capture = next(it for it in items if it["item_id"] == "capture")
+        self.assertIn("background", capture)
+        persist = next(t for t in capture["tasks"] if t["task_id"] == "persist-card")
+        self.assertEqual(persist["status"], "done")
+        self.assertEqual(persist["next_action"], "Add retry.")
+        route = next(t for t in capture["tasks"] if t["task_id"] == "route-archive")
+        self.assertEqual(route["status"], "in_progress")
+
+    def test_v2_timeline_returns_events(self):
+        result = handle_timeline({"project_path": str(self.project)})
+        self.assertTrue(result["ok"])
+        events = result["events"]
+        self.assertEqual(len(events), 2)
+        self.assertIn("event-a", [e["event_id"] for e in events])
+
+    def test_v2_sqlite_rebuild_and_readback(self):
+        rebuild_index(self.db, [self.project])
+        task = get_task(self.db, "persist-card")
+        self.assertIsNotNone(task)
+        self.assertEqual(task["next_action"], "Add retry.")
+
+    def test_v2_search_finds_v2_content(self):
+        rebuild_index(self.db, [self.project])
+        results = search_workspace(self.ws, "Persist card")
+        self.assertTrue(any(r.get("kind") == "task" for r in results))
 
 
 if __name__ == "__main__":
