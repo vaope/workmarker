@@ -22,10 +22,19 @@ from pathlib import Path
 from workeventagent.ids import make_event_id, make_stable_id, make_unique_stable_id
 from workeventagent.index_store import init_db, rebuild_index
 from workeventagent.project_schema import (
-    parse_timeline_events,
-    parse_attachment_records,
+    SECTION_BY_ID,
+    SECTION_SPECS,
     find_section,
+    metadata_hash,
+    parse_attachment_records,
+    parse_frontmatter,
+    parse_timeline_events,
+    replace_section_content,
+    schema_version,
     section_content,
+    section_hash,
+    update_frontmatter,
+    validate_reviewed_content,
 )
 from workeventagent.work_map_store import parse_work_map
 from workeventagent.inbox_store import (
@@ -107,6 +116,9 @@ def _main_impl() -> None:
         "resume_correction": handle_resume_correction,
         "project_migration_preview": handle_project_migration_preview,
         "project_migration_apply": handle_project_migration_apply,
+        "project_panorama": handle_project_panorama,
+        "update_project_section": handle_update_project_section,
+        "update_project_profile": handle_update_project_profile,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -1853,5 +1865,193 @@ def handle_project_migration_apply(request: dict) -> dict:
     return apply_v1_to_v2(project_path, db_path, source_hash, status, phase)
 
 
-if __name__ == "__main__":
-    main()
+# ── project_panorama ────────────────────────────────────────
+
+def handle_project_panorama(request: dict) -> dict:
+    """Return typed project panorama data: metadata + all section content/hashes/ownership."""
+    project_path = Path(request["project_path"])
+    text = project_path.read_text(encoding="utf-8")
+    ver = schema_version(text)
+
+    fm = parse_frontmatter(text)
+    project = {
+        "project_id": fm.get("project_id", ""),
+        "title": fm.get("title", ""),
+        "status": fm.get("status", "active"),
+        "phase": fm.get("phase", "planning"),
+        "updated": fm.get("updated", ""),
+        "metadata_hash": metadata_hash(text),
+    }
+
+    if ver < 2:
+        return {
+            "ok": True,
+            "schema_version": ver,
+            "migration_required": True,
+            "project": project,
+            "sections": {},
+        }
+
+    sections: dict[str, dict] = {}
+    for spec in SECTION_SPECS:
+        try:
+            content = section_content(text, spec.section_id)
+        except ValueError:
+            continue
+        visible = _strip_panorama_control(content)
+        source_event_ids = _parse_panorama_source_events(content)
+        sections[spec.section_id] = {
+            "title": spec.title,
+            "ownership": spec.ownership,
+            "content": visible,
+            "hash": section_hash(text, spec.section_id),
+            "source_event_ids": source_event_ids,
+        }
+
+    return {
+        "ok": True,
+        "schema_version": 2,
+        "migration_required": False,
+        "project": project,
+        "sections": sections,
+    }
+
+
+_PANORAMA_CONTROL_RE = re.compile(r"<!--\s*panorama-meta[^>]*-->", re.IGNORECASE)
+
+
+def _replace_section_raw(text: str, section_id: str, content: str) -> str:
+    """Replace section content without validate_reviewed_content (for profile subsections)."""
+    section = find_section(text, section_id)
+    rendered = "\n" + content.strip("\n") + "\n\n"
+    return text[:section.content_start - 1] + rendered + text[section.content_end:]
+
+
+def _strip_panorama_control(content: str) -> str:
+    """Remove panorama-meta control comments from visible content."""
+    cleaned = _PANORAMA_CONTROL_RE.sub("", content)
+    # Remove leading blank lines that were adjacent to removed comments
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip("\n") + "\n"
+
+
+_SOURCE_EVENTS_RE = re.compile(r"source_events=([a-zA-Z0-9_,-]+)")
+
+
+def _parse_panorama_source_events(content: str) -> list[str]:
+    """Extract source event IDs from panorama-meta comments."""
+    ids: list[str] = []
+    for match in _PANORAMA_CONTROL_RE.finditer(content):
+        raw = match.group(0)
+        ev_match = _SOURCE_EVENTS_RE.search(raw)
+        if ev_match:
+            for eid in ev_match.group(1).split(","):
+                eid = eid.strip()
+                if eid:
+                    ids.append(eid)
+    return ids
+
+
+# ── update_project_section ─────────────────────────────────
+
+_EDITABLE_SECTIONS = {"technical-overview", "project-knowledge"}
+
+
+def handle_update_project_section(request: dict) -> dict:
+    """Hash-guarded edit of a reviewed section (technical-overview, project-knowledge)."""
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    section_id = request["section_id"]
+    base_hash = request["base_section_hash"]
+    content = request["content"]
+
+    if section_id not in _EDITABLE_SECTIONS:
+        return {"ok": False, "kind": "invalid_operation",
+                "error": f"section {section_id} cannot be edited through this handler"}
+
+    text = project_path.read_text(encoding="utf-8")
+    if schema_version(text) < 2:
+        return {"ok": False, "kind": "invalid_operation",
+                "error": "project must be migrated to v2 first"}
+
+    # Validate hash
+    if section_hash(text, section_id) != base_hash:
+        return {"ok": False, "kind": "stale_section",
+                "error": "section has changed — reload and re-edit"}
+
+    # Validate and apply
+    validate_reviewed_content(content)
+    updated = replace_section_content(text, section_id, content)
+
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    updated = _bump_updated_text(updated, date_str)
+
+    write_project_atomically(project_path, updated)
+    init_db(db_path)
+    rebuild_index(db_path, [project_path])
+    return {"ok": True, "section_id": section_id}
+
+
+# ── update_project_profile ─────────────────────────────────
+
+_PROFILE_FIELDS = ("background", "goal", "scope", "success_criteria")
+_PROFILE_SUBSECTION_TITLES = {
+    "background": "背景",
+    "goal": "目标",
+    "scope": "范围",
+    "success_criteria": "成功标准",
+}
+
+
+def handle_update_project_profile(request: dict) -> dict:
+    """Hash-guarded edit of project profile: metadata + 4 subsections."""
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    base_section_hash = request["base_section_hash"]
+    base_metadata_hash = request["base_metadata_hash"]
+    status = request.get("status", "")
+    phase = request.get("phase", "")
+
+    text = project_path.read_text(encoding="utf-8")
+    if schema_version(text) < 2:
+        return {"ok": False, "kind": "invalid_operation",
+                "error": "project must be migrated to v2 first"}
+
+    # Validate hashes
+    if section_hash(text, "project-profile") != base_section_hash:
+        return {"ok": False, "kind": "stale_section",
+                "error": "project profile has changed — reload and re-edit"}
+    if metadata_hash(text) != base_metadata_hash:
+        return {"ok": False, "kind": "stale_metadata",
+                "error": "project metadata has changed — reload and re-edit"}
+
+    # Build profile content from typed fields
+    lines: list[str] = []
+    for field_key in _PROFILE_FIELDS:
+        value = request.get(field_key, "").strip()
+        # Validate each field value individually (profile subsections are structural)
+        if "<!--" in value or "\n---\n" in value:
+            return {"ok": False, "kind": "invalid_input",
+                    "error": f"field {field_key} contains control syntax"}
+        lines.append(f"### {_PROFILE_SUBSECTION_TITLES[field_key]}\n{value}\n")
+
+    profile_content = "\n".join(lines)
+
+    updated = _replace_section_raw(text, "project-profile", profile_content)
+
+    # Update status/phase in frontmatter
+    fm_updates: dict[str, str] = {}
+    if status:
+        fm_updates["status"] = status
+    if phase:
+        fm_updates["phase"] = phase
+    if fm_updates:
+        updated = update_frontmatter(updated, fm_updates)
+
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    updated = _bump_updated_text(updated, date_str)
+
+    write_project_atomically(project_path, updated)
+    init_db(db_path)
+    rebuild_index(db_path, [project_path])
+    return {"ok": True, "section_id": "project-profile"}

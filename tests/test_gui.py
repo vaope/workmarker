@@ -2212,5 +2212,132 @@ class V2ProjectReadTest(unittest.TestCase):
         self.assertTrue(any(r.get("kind") == "task" for r in results))
 
 
+class V2PanoramaTests(unittest.TestCase):
+    """Project panorama read and reviewed-section edits for schema v2."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ws = Path(self.tmp.name)
+        self.db = self.ws / "index.sqlite"
+        init_db(self.db)
+        self.project = self.ws / "report-project.md"
+        self.project.write_text(
+            Path("tests/fixtures/project-v2.md").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_project_panorama_returns_owned_sections_and_hashes(self):
+        from workeventagent.gui import handle_project_panorama
+        result = handle_project_panorama({"project_path": str(self.project)})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["schema_version"], 2)
+        self.assertFalse(result.get("migration_required"))
+        self.assertEqual(result["project"]["status"], "active")
+        self.assertEqual(result["project"]["phase"], "implementation")
+        self.assertIn("metadata_hash", result["project"])
+        self.assertTrue(result["project"]["metadata_hash"].startswith("sha256:"))
+
+        sections = result["sections"]
+        self.assertIn("project-profile", sections)
+        self.assertEqual(sections["project-profile"]["ownership"], "reviewed")
+        self.assertIn("hash", sections["project-profile"])
+        self.assertTrue(sections["project-profile"]["hash"].startswith("sha256:"))
+        self.assertIn("title", sections["project-profile"])
+        self.assertIn("content", sections["project-profile"])
+        self.assertIn("source_event_ids", sections["project-profile"])
+
+        self.assertIn("current-panorama", sections)
+        self.assertEqual(sections["current-panorama"]["ownership"], "derived-reviewed")
+
+        self.assertIn("technical-overview", sections)
+        self.assertEqual(sections["technical-overview"]["ownership"], "reviewed")
+
+        self.assertIn("timeline", sections)
+        self.assertEqual(sections["timeline"]["ownership"], "append-only")
+
+        # Control metadata is stripped from visible content
+        self.assertNotIn("panorama-meta", sections["project-profile"]["content"])
+        self.assertNotIn("section:", sections["timeline"]["content"])
+
+    def test_panorama_content_strips_control_comments(self):
+        from workeventagent.gui import handle_project_panorama
+        result = handle_project_panorama({"project_path": str(self.project)})
+        content = result["sections"]["technical-overview"]["content"]
+        self.assertIn("Python", content)
+        self.assertNotIn("<!--", content)
+
+    def test_reviewed_edit_rejects_stale_hash_without_write(self):
+        from workeventagent.gui import handle_update_project_section
+        before = self.project.read_text(encoding="utf-8")
+        result = handle_update_project_section({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "section_id": "technical-overview",
+            "base_section_hash": "sha256:stale",
+            "content": "Python 负责写入。",
+        })
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kind"], "stale_section")
+        self.assertEqual(self.project.read_text(encoding="utf-8"), before)
+
+    def test_reviewed_edit_rejects_protected_section(self):
+        from workeventagent.gui import handle_update_project_section
+        result = handle_update_project_section({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "section_id": "timeline",
+            "base_section_hash": "sha256:any",
+            "content": "not allowed",
+        })
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kind"], "invalid_operation")
+
+    def test_profile_edit_updates_explicit_metadata_and_fixed_subsections(self):
+        from workeventagent.gui import handle_project_panorama, handle_update_project_profile
+        current = handle_project_panorama({"project_path": str(self.project)})
+        self.assertTrue(current["ok"])
+
+        result = handle_update_project_profile({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "base_section_hash": current["sections"]["project-profile"]["hash"],
+            "base_metadata_hash": current["project"]["metadata_hash"],
+            "status": "active",
+            "phase": "implementation",
+            "background": "信息散落。",
+            "goal": "形成可信项目全景。",
+            "scope": "本地优先。",
+            "success_criteria": "单文档可读。",
+        })
+        self.assertTrue(result["ok"], str(result))
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("phase: implementation", text)
+        self.assertIn("### 成功标准\n单文档可读。", text)
+        self.assertIn("### 背景\n信息散落。", text)
+
+    def test_profile_edit_rejects_stale_metadata_hash(self):
+        from workeventagent.gui import handle_project_panorama, handle_update_project_profile
+        current = handle_project_panorama({"project_path": str(self.project)})
+        before = self.project.read_text(encoding="utf-8")
+        result = handle_update_project_profile({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "base_section_hash": current["sections"]["project-profile"]["hash"],
+            "base_metadata_hash": "sha256:stale",
+            "status": "active",
+            "phase": "planning",
+            "background": "",
+            "goal": "",
+            "scope": "",
+            "success_criteria": "",
+        })
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kind"], "stale_metadata")
+        self.assertEqual(self.project.read_text(encoding="utf-8"), before)
+
+
 if __name__ == "__main__":
     unittest.main()
