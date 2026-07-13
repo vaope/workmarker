@@ -806,37 +806,36 @@ function _keyCodeToElectron(code, key) {
   return null;
 }
 
+function bindAcceleratorCapture(input) {
+  input.onkeydown = (event) => {
+    if (event.key === 'Tab') return;
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      input.value = '';
+      event.preventDefault();
+      return;
+    }
+    if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const keys = [];
+    if (event.ctrlKey || event.metaKey) keys.push('CommandOrControl');
+    if (event.altKey) keys.push('Alt');
+    if (event.shiftKey) keys.push('Shift');
+    const mainKey = _keyCodeToElectron(event.code, event.key);
+    if (mainKey) { keys.push(mainKey); input.value = keys.join('+'); }
+  };
+}
+
 function openSettingsModal() {
   state.settingsWorkspace = (state.config && state.config.workspace) || '';
   $('#settings-workspace').value = state.settingsWorkspace;
   $('#settings-hotkey').value = (state.config && state.config.hotkey) || 'CommandOrControl+Shift+Space';
+  $('#settings-main-hotkey').value = (state.config && state.config.mainHotkey) || 'CommandOrControl+Shift+M';
   $('#settings-model').value = (state.config && state.config.opencodeModel) || '';
   $('#settings-error').classList.add('hidden');
   $('#settings-modal').classList.remove('hidden');
-  // Re-attach keydown capture each time modal opens (prevents duplicate listeners)
-  const hotkeyInput = $('#settings-hotkey');
-  hotkeyInput.onkeydown = null; // clear previous
-  hotkeyInput.addEventListener('keydown', function _captureHotkey(e) {
-    if (e.key === 'Tab') return; // allow Tab to move focus
-    if (e.key === 'Backspace' || e.key === 'Delete') {
-      hotkeyInput.value = '';
-      e.preventDefault();
-      return;
-    }
-    // Only capture when at least one modifier is held
-    if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const keys = [];
-    if (e.ctrlKey || e.metaKey) keys.push('CommandOrControl');
-    if (e.altKey) keys.push('Alt');
-    if (e.shiftKey) keys.push('Shift');
-    const mainKey = _keyCodeToElectron(e.code, e.key);
-    if (mainKey) {
-      keys.push(mainKey);
-      hotkeyInput.value = keys.join('+');
-    }
-  });
+  bindAcceleratorCapture($('#settings-hotkey'));
+  bindAcceleratorCapture($('#settings-main-hotkey'));
 }
 
 async function pickSettingsWorkspace() {
@@ -847,15 +846,24 @@ async function pickSettingsWorkspace() {
 }
 
 async function saveSettings() {
-  const hotkey = $('#settings-hotkey').value.trim() || 'CommandOrControl+Shift+Space';
-  const patch = { hotkey, opencodeModel: $('#settings-model').value.trim() };
+  const captureAcceleratorInput = $('#settings-hotkey');
+  const mainAcceleratorInput = $('#settings-main-hotkey');
+  const hotkey = captureAcceleratorInput.value.trim();
+  const mainHotkey = mainAcceleratorInput.value.trim();
+  if (!hotkey || !mainHotkey) { showSettingsError('两个快捷键都不能为空'); return; }
+  if (hotkey === mainHotkey) { showSettingsError('快速捕获和主窗口不能使用同一个快捷键'); return; }
+  const patch = { hotkey, mainHotkey, opencodeModel: $('#settings-model').value.trim() };
   if (state.settingsWorkspace) patch.workspace = state.settingsWorkspace;
   $('#settings-save').disabled = true;
   try {
     const updated = await wea.updateConfig(patch);
     state.config = updated;
-    if (!updated.hotkeyRegistered) {
-      showSettingsError('快捷键注册失败，请换一个组合键');
+    if (!updated.hotkeyRegistered || !updated.mainHotkeyRegistered) {
+      captureAcceleratorInput.value = updated.hotkey || hotkey;
+      mainAcceleratorInput.value = updated.mainHotkey || mainHotkey;
+      const kind = updated.hotkeyErrorKind || 'registration_conflict';
+      const failed = updated.failedHotkey || 'main';
+      showSettingsError(`快捷键注册失败 (${kind}: ${failed})，请换一个组合键`);
       return;
     }
     $('#settings-modal').classList.add('hidden');

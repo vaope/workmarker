@@ -36,3 +36,15 @@ def test_main_process_config_reader_is_available_to_scheduler() -> None:
     scheduler_pos = source.index("async function runScheduledReports")
     assert cfg_pos < attach_pos < scheduler_pos
     assert source.count("const cfg = () => loadConfig();") == 1
+
+
+def test_settings_exposes_two_labeled_hotkey_capture_inputs() -> None:
+    html = Path("client/windows/main.html").read_text(encoding="utf-8")
+    source = Path("client/windows/main.js").read_text(encoding="utf-8")
+    assert 'id="settings-hotkey"' in html
+    assert 'id="settings-main-hotkey"' in html
+    assert "快速捕获快捷键" in html
+    assert "主窗口快捷键" in html
+    assert "mainHotkey" in source
+    assert "captureAcceleratorInput" in source
+    assert "mainAcceleratorInput" in source
