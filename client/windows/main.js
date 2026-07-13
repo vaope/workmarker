@@ -9,6 +9,8 @@ const state = {
   pending: [],          // [{tempPath, filename}]
   inboxCards: [],       // Inbox cards for Today summary
   view: 'tasks',
+  panoramaData: null,
+  migrationPreview: null,
   busy: false,
   manualMode: null,     // "item" | "task"
   manualItemId: '',
@@ -119,6 +121,15 @@ function bindStaticHandlers() {
   $('#corr-submit').addEventListener('click', submitCorrection);
   $('#corr-target-project').addEventListener('change', onCorrectionTargetProjectChange);
 
+  // panorama modals
+  $('#migration-cancel').addEventListener('click', closeMigrationModal);
+  $('#migration-preview').addEventListener('click', previewMigration);
+  $('#migration-apply').addEventListener('click', applyMigration);
+  $('#profile-save').addEventListener('click', saveProfile);
+  $('#profile-cancel').addEventListener('click', closeProfileModal);
+  $('#section-save').addEventListener('click', saveSection);
+  $('#section-cancel').addEventListener('click', closeSectionModal);
+
   // report
   $('#report-generate').addEventListener('click', generateReport);
   $('#report-save-schedule').addEventListener('click', saveReportSchedule);
@@ -193,10 +204,13 @@ async function selectProject(p) {
 async function refreshCurrent() {
   if (!state.currentProject) return;
   const path = state.currentProject.path;
-  const tasks = await wea.listTasks(path);
+  const [tasks, panorama] = await Promise.all([
+    wea.listTasks(path),
+    wea.getProjectPanorama(path),
+  ]);
   state.tasksData = tasks && tasks.ok ? tasks : { items: [] };
-  renderTasks();
-  // refresh sidebar counts quietly
+  state.panoramaData = panorama && panorama.ok ? panorama : null;
+  renderProjectPanorama();
   const fresh = await wea.listProjects();
   if (fresh && fresh.ok) { state.projects = fresh.projects; renderProjectList(state.projects); }
   renderActionSummary();
@@ -264,10 +278,30 @@ function bindSearchResults() {
   });
 }
 
-// ---- tasks view ----------------------------------------------------------
+function renderProjectPanorama() {
+  var panoramaBody = $('#panorama-body');
+  var tasksBody = $('#tasks-body');
+  if (!state.panoramaData || !state.panoramaData.sections) {
+    // Fallback: v1 project or no panorama, show work map only
+    panoramaBody.innerHTML = '';
+    tasksBody.classList.remove('hidden');
+    renderTasks();
+    return;
+  }
+  // v2: panorama is the primary surface
+  tasksBody.classList.add('hidden');
+  var items = (state.tasksData && state.tasksData.items) || [];
+  var workMapHtml = items.length ? WorkMap.render(items) : '';
+  panoramaBody.innerHTML = ProjectPanorama.render(state.panoramaData, workMapHtml);
+  bindPanoramaActions();
+  if (state.panoramaData.migration_required) {
+    showMigrationPrompt();
+  }
+}
+
 function renderTasks() {
-  const body = $('#tasks-body');
-  const items = (state.tasksData && state.tasksData.items) || [];
+  var body = $('#tasks-body');
+  var items = (state.tasksData && state.tasksData.items) || [];
   if (!items.length) {
     body.innerHTML = '<div class="empty">这个项目还没有工作项。点击「+ 新建工作项」开始。</div>';
     return;
@@ -304,6 +338,34 @@ function bindWorkMapActions() {
     row.querySelector('.task-edit-btn').addEventListener('click', () => showTaskEditor(row, task));
     row.querySelector('.task-del-btn').addEventListener('click', () => confirmDeleteTask(row, task));
   });
+}
+
+function bindPanoramaActions() {
+  var migrationPreviewBtn = document.querySelector('.migration-preview-btn');
+  if (migrationPreviewBtn) {
+    migrationPreviewBtn.addEventListener('click', openMigrationModal);
+  }
+  document.querySelectorAll('.edit-profile').forEach(function(btn) {
+    btn.addEventListener('click', function() { openProfileModal(); });
+  });
+  document.querySelectorAll('.edit-section').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      openSectionModal(btn.dataset.section);
+    });
+  });
+  document.querySelectorAll('.source-section').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var sectionId = btn.dataset.section;
+      var sec = (state.panoramaData && state.panoramaData.sections && state.panoramaData.sections[sectionId]) || {};
+      var ids = sec.source_event_ids || [];
+      if (!ids.length) {
+        toast('暂无已记录来源；自动证据综合将在 Phase B 提供', 'info');
+        return;
+      }
+      toast('来源事件: ' + ids.join(', '), 'info');
+    });
+  });
+  bindWorkMapActions();
 }
 
 async function toggleTaskCompletion(input, task) {
@@ -929,7 +991,11 @@ async function createProject() {
     el.querySelectorAll('.task-title').forEach((ti) => { const v = ti.value.trim(); if (v) tasks.push(v); });
     items.push({ title: itTitle, tasks });
   });
-  const res = await wea.initProject({ title, project_id: projectId, items });
+  const res = await wea.initProject({
+    title, project_id: projectId, items,
+    status: $('#init-status').value,
+    phase: $('#init-phase').value,
+  });
   if (!res || !res.ok) {
     showInitError(res && res.kind === 'exists' ? '已存在同名项目 ID，请换一个' : `创建失败：${(res && res.error) || '后端未就绪'}`);
     return;
@@ -1286,3 +1352,220 @@ async function resumePendingCorrection(correctionId, btn) {
 }
 
 window.addEventListener('DOMContentLoaded', boot);
+
+// ---- panorama migration -------------------------------------------------
+
+function showMigrationPrompt() {
+  var body = $('#panorama-body');
+  if (!body) return;
+  var card = document.createElement('div');
+  card.className = 'migration-card';
+  card.innerHTML = '<div class="migration-card-content">' +
+    '<h3>项目文档可升级</h3>' +
+    '<p>当前项目使用旧版格式。升级后可获得项目全景视图和区块编辑功能。</p>' +
+    '<button class="migration-preview-btn primary">开始升级</button>' +
+    '</div>';
+  body.insertBefore(card, body.firstChild);
+  bindPanoramaActions();
+}
+
+function openMigrationModal() {
+  $('#migration-modal').classList.remove('hidden');
+  $('#migration-diff').classList.add('hidden');
+  $('#migration-apply').classList.add('hidden');
+  $('#migration-error').classList.add('hidden');
+}
+
+function closeMigrationModal() {
+  $('#migration-modal').classList.add('hidden');
+}
+
+async function previewMigration() {
+  var status = $('#migration-status').value;
+  var phase = $('#migration-phase').value;
+  if (!state.currentProject) return;
+  try {
+    var res = await wea.previewProjectMigration(state.currentProject.path, status, phase);
+    if (!res || !res.ok) {
+      $('#migration-error').textContent = (res && res.error) || '预览失败';
+      $('#migration-error').classList.remove('hidden');
+      return;
+    }
+    state.migrationPreview = res.migration;
+    $('#migration-diff').textContent = res.migration.diff;
+    $('#migration-diff').classList.remove('hidden');
+    $('#migration-apply').classList.remove('hidden');
+    $('#migration-error').classList.add('hidden');
+  } catch (err) {
+    $('#migration-error').textContent = err.message || '预览出错';
+    $('#migration-error').classList.remove('hidden');
+  }
+}
+
+async function applyMigration() {
+  if (!state.currentProject || !state.migrationPreview) return;
+  var btn = $('#migration-apply');
+  btn.disabled = true;
+  try {
+    var res = await wea.applyProjectMigration(
+      state.currentProject.path,
+      state.migrationPreview.source_hash,
+      state.migrationPreview.status,
+      state.migrationPreview.phase
+    );
+    if (!res || !res.ok) {
+      var msg = (res && res.error) || '迁移失败';
+      if (res && res.kind === 'stale_source') msg = '项目内容已变化，请重新预览';
+      $('#migration-error').textContent = msg;
+      $('#migration-error').classList.remove('hidden');
+      if (res && res.kind === 'stale_source') {
+        $('#migration-diff').classList.add('hidden');
+        $('#migration-apply').classList.add('hidden');
+      }
+      btn.disabled = false;
+      return;
+    }
+    closeMigrationModal();
+    toast('迁移成功。备份: ' + (res.backup_path || ''), 'ok');
+    await refreshCurrent();
+  } catch (err) {
+    $('#migration-error').textContent = err.message || '迁移出错';
+    $('#migration-error').classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---- panorama profile ---------------------------------------------------
+
+function extractProfileField(content, label) {
+  if (!content) return '';
+  var lines = content.split('\n');
+  var inField = false;
+  var values = [];
+  for (var i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith('### ' + label)) { inField = true; continue; }
+    if (inField && lines[i].startsWith('### ')) break;
+    if (inField) values.push(lines[i]);
+  }
+  return values.join('\n').trim();
+}
+
+function openProfileModal() {
+  if (!state.panoramaData) return;
+  var profile = state.panoramaData.sections['project-profile'] || {};
+  var content = profile.content || '';
+  var project = state.panoramaData.project || {};
+  $('#profile-status').value = project.status || 'active';
+  $('#profile-phase').value = project.phase || 'planning';
+  $('#profile-background').value = extractProfileField(content, '背景');
+  $('#profile-goal').value = extractProfileField(content, '目标');
+  $('#profile-scope').value = extractProfileField(content, '范围');
+  $('#profile-criteria').value = extractProfileField(content, '成功标准');
+  $('#project-profile-modal').classList.remove('hidden');
+  $('#profile-error').classList.add('hidden');
+}
+
+function closeProfileModal() {
+  $('#project-profile-modal').classList.add('hidden');
+}
+
+async function saveProfile() {
+  if (!state.currentProject || !state.panoramaData) return;
+  var btn = $('#profile-save');
+  btn.disabled = true;
+  var profile = state.panoramaData.sections['project-profile'] || {};
+  var project = state.panoramaData.project || {};
+  try {
+    var res = await wea.updateProjectProfile({
+      projectPath: state.currentProject.path,
+      baseSectionHash: profile.hash || '',
+      baseMetadataHash: project.metadata_hash || '',
+      status: $('#profile-status').value,
+      phase: $('#profile-phase').value,
+      background: $('#profile-background').value.trim(),
+      goal: $('#profile-goal').value.trim(),
+      scope: $('#profile-scope').value.trim(),
+      successCriteria: $('#profile-criteria').value.trim(),
+    });
+    if (!res || !res.ok) {
+      var kind = (res && res.kind) || '';
+      var msg = '保存失败';
+      if (kind === 'stale_section') msg = '项目档案已变化，请基于最新版本重新编辑';
+      else if (kind === 'stale_metadata') msg = '项目元数据已变化，请基于最新版本重新编辑';
+      else if (res && res.error) msg = res.error;
+      $('#profile-error').textContent = msg;
+      $('#profile-error').classList.remove('hidden');
+      if (kind === 'stale_section' || kind === 'stale_metadata') {
+        closeProfileModal();
+        await refreshCurrent();
+      }
+      return;
+    }
+    closeProfileModal();
+    await refreshCurrent();
+  } catch (err) {
+    $('#profile-error').textContent = err.message || '保存出错';
+    $('#profile-error').classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---- panorama section edit ----------------------------------------------
+
+var _currentSectionId = '';
+
+function openSectionModal(sectionId) {
+  if (!state.panoramaData) return;
+  var sec = state.panoramaData.sections[sectionId];
+  if (!sec) return;
+  _currentSectionId = sectionId;
+  $('#section-modal-title').textContent = sec.title || sectionId;
+  $('#section-modal-content').value = sec.content || '';
+  $('#project-section-modal').classList.remove('hidden');
+  $('#section-error').classList.add('hidden');
+  $('#section-modal-content').focus();
+}
+
+function closeSectionModal() {
+  $('#project-section-modal').classList.add('hidden');
+  _currentSectionId = '';
+}
+
+async function saveSection() {
+  if (!state.currentProject || !_currentSectionId) return;
+  var btn = $('#section-save');
+  btn.disabled = true;
+  var sec = state.panoramaData.sections[_currentSectionId];
+  if (!sec) { btn.disabled = false; return; }
+  try {
+    var res = await wea.updateProjectSection(
+      _currentSectionId,
+      sec.hash || '',
+      $('#section-modal-content').value,
+      state.currentProject.path
+    );
+    if (!res || !res.ok) {
+      var kind = (res && res.kind) || '';
+      var msg = '保存失败';
+      if (kind === 'stale_section') msg = '内容已变化，请基于最新版本重新编辑';
+      else if (kind === 'invalid_operation') msg = '该区块不能通过此方式编辑';
+      else if (res && res.error) msg = res.error;
+      $('#section-error').textContent = msg;
+      $('#section-error').classList.remove('hidden');
+      if (kind === 'stale_section') {
+        closeSectionModal();
+        await refreshCurrent();
+      }
+      return;
+    }
+    closeSectionModal();
+    await refreshCurrent();
+  } catch (err) {
+    $('#section-error').textContent = err.message || '保存出错';
+    $('#section-error').classList.remove('hidden');
+  } finally {
+    btn.disabled = false;
+  }
+}
