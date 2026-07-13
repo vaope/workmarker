@@ -65,6 +65,7 @@ from workeventagent.project_schema import (
     find_section,
     metadata_hash,
     parse_frontmatter,
+    parse_timeline_events,
     replace_section_content,
     schema_version,
     section_content,
@@ -114,6 +115,14 @@ def test_replace_section_preserves_neighbors_and_rejects_stale_control_text() ->
     assert "<!-- event:event-a -->" in updated
     with pytest.raises(ValueError, match="control syntax"):
         validate_reviewed_content("## 伪造区块 <!-- section:timeline -->")
+    with pytest.raises(ValueError, match="control syntax"):
+        validate_reviewed_content("### 伪造子标题")
+
+
+def test_timeline_parser_uses_stable_section_anchor_for_v2() -> None:
+    events = parse_timeline_events(V2)
+    assert [event["event_id"] for event in events] == ["event-a"]
+    assert events[0]["summary"] == "完成基础验证"
 
 
 def test_frontmatter_and_metadata_hash_are_explicit() -> None:
@@ -234,7 +243,7 @@ def metadata_hash(text: str) -> str:
 
 def validate_reviewed_content(content: str) -> None:
     normalized = content.replace("\r\n", "\n").replace("\r", "\n")
-    if "<!--" in normalized or re.search(r"(?m)^#{1,2}\s", normalized) or "\n---\n" in normalized:
+    if "<!--" in normalized or re.search(r"(?m)^#{1,6}\s", normalized) or "\n---\n" in normalized:
         raise ValueError("reviewed content contains control syntax")
 
 
@@ -245,7 +254,7 @@ def replace_section_content(text: str, section_id: str, content: str) -> str:
     return text[:section.content_start - 1] + rendered + text[section.content_end:]
 ```
 
-Also implement `update_frontmatter`, `parse_timeline_events`, and `parse_attachment_records` by moving the existing deterministic parsing rules out of `gui.py`/`index_store.py`. Preserve multiline Timeline fields and return newest-first event order.
+Also implement `update_frontmatter`, `parse_timeline_events`, and `parse_attachment_records` by moving the existing deterministic parsing rules out of `gui.py`/`index_store.py`. `parse_timeline_events` must derive its parsing window from `find_section(text, "timeline")`; it must not continue to compare headings to the v1 literal `## Timeline`, because v2 uses `## 事件证据 <!-- section:timeline -->`. Preserve multiline Timeline fields and return newest-first event order.
 
 - [ ] **Step 4: Rewrite the protocol document as schema v2**
 
@@ -624,10 +633,18 @@ git commit -m "feat: write human-readable project schema v2" -m "Why: Capture an
 
 - [ ] **Step 1: Write golden migration tests**
 
-Create tests covering success, stale source, unsafe source, idempotency, and rollback:
+Create tests covering success, stale source, unsafe source, idempotency, replace-before-write rollback, and post-replace read-back verification rollback:
 
 ```python
+import dataclasses
 from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+from workeventagent import project_migration
+from workeventagent.project_migration import apply_v1_to_v2, preview_v1_to_v2
+from workeventagent.project_schema import schema_version
 
 
 def fixed_now() -> datetime:
@@ -678,9 +695,32 @@ def test_apply_writes_backup_then_verified_v2(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert Path(result["backup_path"]).read_text(encoding="utf-8") == preview.original_text
     assert schema_version(project.read_text(encoding="utf-8")) == 2
+
+
+def test_apply_restores_backup_when_readback_identity_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = write_v1_fixture(tmp_path)
+    original = project.read_text(encoding="utf-8")
+    preview = preview_v1_to_v2(original, "active", "delivery")
+
+    calls = {"count": 0}
+    real_manifest = project_migration.identity_manifest
+
+    def flaky_identity(text: str):
+        calls["count"] += 1
+        if calls["count"] >= 3:
+            return dataclasses.replace(real_manifest(text), timeline_event_count=999)
+        return real_manifest(text)
+
+    monkeypatch.setattr(project_migration, "identity_manifest", flaky_identity)
+    result = apply_v1_to_v2(project, tmp_path / "index.sqlite", preview.source_hash, "active", "delivery", fixed_now())
+    assert result["ok"] is False
+    assert result["kind"] == "migration_verify_failed"
+    assert result["restored"] is True
+    assert Path(result["backup_path"]).read_text(encoding="utf-8") == original
+    assert project.read_text(encoding="utf-8") == original
 ```
 
-Also monkeypatch `os.replace` to fail and assert the original project remains untouched and the backup remains readable.
+Also monkeypatch `os.replace` to fail before replacement and assert the original project remains untouched and the backup remains readable.
 
 - [ ] **Step 2: Run migration tests to verify red**
 
@@ -747,7 +787,8 @@ Transformation rules:
 6. read back and verify the identity manifest;
 7. restore the backup atomically if read-back verification fails;
 8. rebuild SQLite;
-9. return `backup_path`, `project_path`, and `schema_version: 2`.
+9. on success, return `backup_path`, `project_path`, and `schema_version: 2`;
+10. if step 6 read-back verification fails after replacement and backup restoration succeeds, return `{"ok":false,"kind":"migration_verify_failed","restored":true,"backup_path":"...","project_path":"..."}`. If restoration itself fails, raise a visible hard error that includes both paths; do not rebuild SQLite from the unverified document.
 
 - [ ] **Step 5: Run migration and full persistence regressions**
 
@@ -1098,6 +1139,8 @@ async function refreshCurrent() {
 ```
 
 For v1, `renderProjectPanorama()` renders the current Work Map plus a visible migration card; it must not block capture or existing task actions. For v2, it passes `WorkMap.render(items)` into the pure panorama renderer, then binds Work Map, edit, source, and migration actions.
+
+**Checkpoint:** after Step 4, run the Step 1 guards plus `node --check client/windows/main.js` before adding preview/apply and reviewed-edit bindings. Task 8 is the largest integration task; this checkpoint prevents modal wiring and panorama refresh bugs from being hidden under later UI work.
 
 - [ ] **Step 5: Implement preview/apply flow**
 

@@ -4,7 +4,7 @@
 
 **Goal:** Add a separate configurable global shortcut that focuses the main WorkEventAgent window and hides it to the tray on the next focused-window trigger, without weakening the existing quick-capture shortcut.
 
-**Architecture:** Extract global-shortcut registration into a pure transactional manager that can be tested with a fake Electron `globalShortcut`. The manager registers capture and main-window accelerators as one pair and restores the previous valid pair if either new accelerator conflicts. The existing `hotkey` config key remains the quick-capture shortcut for backward compatibility; `mainHotkey` is added independently.
+**Architecture:** Extract global-shortcut registration into a pure manager that can be tested with a fake Electron `globalShortcut`. Startup registration treats quick-capture and main-window shortcuts independently so a new `mainHotkey` conflict cannot disable the existing capture shortcut. Settings updates use a transactional pair registration and restore the previous valid registrations if either new accelerator conflicts. The existing `hotkey` config key remains the quick-capture shortcut for backward compatibility; `mainHotkey` is added independently.
 
 **Tech Stack:** Electron 33 main process, browser JavaScript settings UI, Node-backed pytest tests, no new dependencies.
 
@@ -16,7 +16,8 @@
 - Triggering the main shortcut when the main window is absent creates, shows, and focuses it.
 - Triggering it when the main window exists but is hidden or not focused shows and focuses it.
 - Triggering it when the main window is visible and focused hides it to the tray.
-- If registration of either new shortcut fails, restore the previous valid pair and persist the previous configuration.
+- Startup registration is independent: if `mainHotkey` conflicts, keep the existing quick-capture `hotkey` registered and return a visible main-hotkey failure state.
+- During settings updates, if registration of either requested shortcut fails, restore the previous valid registrations and persist the previous configuration.
 - Do not call `globalShortcut.unregisterAll()` during a settings update.
 - Preserve `contextIsolation: true`, `nodeIntegration: false`, and preload-only config IPC.
 - Do not change project Markdown, schema, capture, Inbox, reports, or synthesis contracts.
@@ -42,7 +43,7 @@
 
 **Interfaces:**
 - Produces `createHotkeyManager(globalShortcut, actions)`.
-- Returned manager exposes `registerPair(pair)`, `activePair()`, and `dispose()`.
+- Returned manager exposes `registerStartupPair(pair)`, `registerPair(pair)`, `activePair()`, and `dispose()`.
 - `pair` shape is `{ capture: string, main: string }`; `actions` shape is `{ capture: Function, main: Function }`.
 
 - [ ] **Step 1: Write failing manager tests**
@@ -101,6 +102,33 @@ process.stdout.write(JSON.stringify({ failed, active: manager.activePair(), keys
     assert result["keys"] == ["Ctrl+Shift+M", "Ctrl+Shift+Space"]
 
 
+def test_startup_main_conflict_keeps_capture_shortcut() -> None:
+    result = _run(r"""
+const { createHotkeyManager } = require('./client/hotkey_manager');
+const callbacks = new Map();
+const blocked = new Set(['Ctrl+Shift+M']);
+const shortcut = {
+  register(key, cb) { if (blocked.has(key) || callbacks.has(key)) return false; callbacks.set(key, cb); return true; },
+  unregister(key) { callbacks.delete(key); },
+};
+const calls = [];
+const manager = createHotkeyManager(shortcut, {
+  capture: () => calls.push('capture'),
+  main: () => calls.push('main'),
+});
+const startup = manager.registerStartupPair({ capture: 'Ctrl+Shift+Space', main: 'Ctrl+Shift+M' });
+callbacks.get('Ctrl+Shift+Space')();
+process.stdout.write(JSON.stringify({ startup, calls, active: manager.activePair(), keys: [...callbacks.keys()].sort() }));
+""")
+    assert result["startup"]["ok"] is False
+    assert result["startup"]["failed"] == "main"
+    assert result["startup"]["captureRegistered"] is True
+    assert result["startup"]["mainRegistered"] is False
+    assert result["calls"] == ["capture"]
+    assert result["active"] == {"capture": "Ctrl+Shift+Space", "main": ""}
+    assert result["keys"] == ["Ctrl+Shift+Space"]
+
+
 def test_rejects_duplicate_or_blank_pair_without_unregistering() -> None:
     result = _run(r"""
 const { createHotkeyManager } = require('./client/hotkey_manager');
@@ -155,6 +183,38 @@ function createHotkeyManager(globalShortcut, actions) {
     return { ok: true };
   }
 
+  function tryRegisterIndependent(pair) {
+    const result = { capture: false, main: false };
+    if (pair.capture) result.capture = globalShortcut.register(pair.capture, actions.capture);
+    if (pair.main && pair.main !== pair.capture) result.main = globalShortcut.register(pair.main, actions.main);
+    return result;
+  }
+
+  function registerStartupPair(candidate) {
+    const next = normalized(candidate);
+    if (!next.capture || !next.main) {
+      return { ok: false, kind: 'invalid_accelerator', failed: !next.capture ? 'capture' : 'main', captureRegistered: false, mainRegistered: false, active: { ...active } };
+    }
+    if (next.capture === next.main) {
+      const captureRegistered = globalShortcut.register(next.capture, actions.capture);
+      active = { capture: captureRegistered ? next.capture : '', main: '' };
+      return { ok: false, kind: 'duplicate_accelerator', failed: 'main', captureRegistered, mainRegistered: false, active: { ...active } };
+    }
+    const registered = tryRegisterIndependent(next);
+    active = {
+      capture: registered.capture ? next.capture : '',
+      main: registered.main ? next.main : '',
+    };
+    return {
+      ok: registered.capture && registered.main,
+      kind: registered.capture && registered.main ? undefined : 'registration_conflict',
+      failed: !registered.capture ? 'capture' : (!registered.main ? 'main' : undefined),
+      captureRegistered: registered.capture,
+      mainRegistered: registered.main,
+      active: { ...active },
+    };
+  }
+
   function registerPair(candidate) {
     const next = normalized(candidate);
     if (!next.capture || !next.main) return { ok: false, kind: 'invalid_accelerator', active: { ...active } };
@@ -169,15 +229,18 @@ function createHotkeyManager(globalShortcut, actions) {
     }
 
     unregisterPair(next);
-    if (previous.capture && previous.main) {
-      const restored = tryRegister(previous);
-      if (!restored.ok) throw new Error('failed to restore previous global shortcuts');
+    if (previous.capture || previous.main) {
+      const restored = tryRegisterIndependent(previous);
+      if ((previous.capture && !restored.capture) || (previous.main && !restored.main)) {
+        throw new Error('failed to restore previous global shortcuts');
+      }
     }
     active = previous;
     return { ok: false, kind: 'registration_conflict', failed: attempt.failed, active: { ...active } };
   }
 
   return Object.freeze({
+    registerStartupPair,
     registerPair,
     activePair: () => ({ ...active }),
     dispose() { unregisterPair(active); active = { capture: '', main: '' }; },
@@ -194,7 +257,7 @@ python -m pytest tests/test_hotkey_manager.py -q
 node --check client/hotkey_manager.js
 ```
 
-Expected: `3 passed`; Node exits 0.
+Expected: `4 passed`; Node exits 0.
 
 - [ ] **Step 5: Commit the manager**
 
@@ -215,7 +278,7 @@ git commit -m "feat: add transactional global hotkey manager" -m "Why: Adding a 
 
 **Interfaces:**
 - Consumes `createHotkeyManager` from Task 1.
-- Produces `toggleMainWindow()`, one startup `registerPair`, and rollback-aware `wea:updateConfig` behavior.
+- Produces `toggleMainWindow()`, independent startup registration via `registerStartupPair`, and rollback-aware transactional `wea:updateConfig` behavior via `registerPair`.
 
 - [ ] **Step 1: Add integration guards**
 
@@ -226,6 +289,7 @@ def test_main_process_has_independent_main_window_hotkey() -> None:
     assert "mainHotkey: 'CommandOrControl+Shift+M'" in config
     assert "function toggleMainWindow()" in source
     assert "mainWindow.isVisible() && mainWindow.isFocused()" in source
+    assert "hotkeyManager.registerStartupPair" in source
     assert "hotkeyManager.registerPair" in source
     assert "globalShortcut.unregisterAll()" not in source
 
@@ -281,7 +345,7 @@ const hotkeyManager = createHotkeyManager(globalShortcut, {
 });
 ```
 
-At startup register `{capture: config.hotkey, main: config.mainHotkey}`. Replace `registerHotkey()` and all `unregisterAll()` calls. `will-quit` calls `hotkeyManager.dispose()`.
+At startup call `hotkeyManager.registerStartupPair({capture: config.hotkey, main: config.mainHotkey})`. Do not use transactional `registerPair` at startup: a `mainHotkey` conflict must leave quick capture registered. Replace `registerHotkey()` and all `unregisterAll()` calls. `will-quit` calls `hotkeyManager.dispose()`.
 
 - [ ] **Step 4: Make config update transactional**
 
