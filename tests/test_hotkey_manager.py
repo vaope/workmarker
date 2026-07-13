@@ -1,5 +1,6 @@
 import json
 import subprocess
+from pathlib import Path
 
 
 def _run(script: str) -> dict:
@@ -89,3 +90,23 @@ process.stdout.write(JSON.stringify({ blank, duplicate, unregisters }));
     assert result["blank"]["kind"] == "invalid_accelerator"
     assert result["duplicate"]["kind"] == "duplicate_accelerator"
     assert result["unregisters"] == 0
+
+
+def test_main_process_has_independent_main_window_hotkey() -> None:
+    config = Path("client/config.js").read_text(encoding="utf-8")
+    source = Path("client/main.js").read_text(encoding="utf-8")
+    assert "mainHotkey: 'CommandOrControl+Shift+M'" in config
+    assert "function toggleMainWindow()" in source
+    assert "mainWindow.isVisible() && mainWindow.isFocused()" in source
+    assert "hotkeyManager.registerStartupPair" in source
+    assert "hotkeyManager.registerPair" in source
+    assert "globalShortcut.unregisterAll()" not in source
+
+
+def test_hotkey_config_failure_returns_previous_pair() -> None:
+    source = Path("client/main.js").read_text(encoding="utf-8")
+    update = source[source.index("ipcMain.handle('wea:updateConfig'"):source.index("ipcMain.handle('wea:pickWorkspaceDir'")]
+    assert "registration.active.capture" in update
+    assert "registration.active.main" in update
+    assert "hotkeyRegistered: false" in update
+    assert "mainHotkeyRegistered: false" in update

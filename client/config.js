@@ -9,6 +9,7 @@ const CONFIG_PATH = path.join(app.getPath('userData'), 'config.json');
 const DEFAULTS = {
   workspace: '',                                   // project library root (chosen on first run)
   hotkey: 'CommandOrControl+Shift+Space',          // global quick-capture hotkey
+  mainHotkey: 'CommandOrControl+Shift+M',         // global main-window toggle
   pythonCmd: 'python',                             // python executable used by python_bridge
   opencodeModel: '',                               // optional provider/model; empty uses opencode default
   reportSchedule: {
