@@ -196,6 +196,25 @@ Electron 客户端 (client/)
 - item anchor 不存在返回 `invalid_project`，不写文件。
 - 手动创建的 task 初始 `status = in_progress`，`next_action`/`last_event_id` 为空，等待后续 AI 归档或用户补充。
 
+### 3.9 project_panorama — v2 项目全景读取
+
+请求：`{"project_path":"..."}`
+v1 返回：`{"ok":true,"schema_version":1,"migration_required":true,"project":{...},"sections":{}}`
+v2 返回：`{"ok":true,"schema_version":2,"migration_required":false,"project":{"project_id":"...","status":"...","phase":"...","metadata_hash":"sha256:..."},"sections":{"project-profile":{"title":"...","ownership":"reviewed","content":"...","hash":"sha256:...","source_event_ids":[]},...}}`
+sections 含全部 9 个区块，ownership ∈ {reviewed, derived-reviewed, structured, append-only, derived}，content 已剥离控制注释。
+
+### 3.10 update_project_profile / update_project_section — hash 守门编辑
+
+profile 编辑：`{"project_path":"...","db_path":"...","base_section_hash":"...","base_metadata_hash":"...","status":"...","phase":"...","background":"...","goal":"...","scope":"...","success_criteria":"..."}`
+section 编辑（仅 technical-overview / project-knowledge）：`{"project_path":"...","db_path":"...","section_id":"...","base_section_hash":"sha256:...","content":"..."}`
+stale hash → `{"ok":false,"kind":"stale_section"/"stale_metadata"}`，不写文件。编辑其他区块 → `invalid_operation`。
+
+### 3.11 project_migration_preview / project_migration_apply — v1→v2 迁移
+
+preview：`{"project_path":"...","status":"active","phase":"planning"}` → 返回 source_hash、diff、identity manifest。
+apply：`{"project_path":"...","db_path":"...","source_hash":"...","status":"...","phase":"..."}` → 写 `.workeventagent/backups/<project_id>/<ts>.md` 备份 → 原子替换 → 读回校验。
+stale source → `stale_source`；读回校验失败 → `migration_verify_failed` 且 restore 成功标记。
+
 ## 4. 项目库 Registry（registry.py）
 
 - workspace 根目录是项目库容器：每项目一个 `<project_id>.md`，一个全局 `index.sqlite`，一个共享 `attachments/`。
