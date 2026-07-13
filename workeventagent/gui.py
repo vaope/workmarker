@@ -1526,67 +1526,6 @@ def _build_project_route_context(projects: list[dict]) -> str:
     return "\n".join(lines)
 
 
-# ── Timeline parser (new capability) ────────────────────
-
-def _parse_timeline_events(text: str) -> list[dict]:
-    """Parse ## Timeline section into list of event dicts.
-
-    Format per WORKLOG_SCHEMA.md:
-        - 2026-06-29T15:30:00.123+08:00 <!-- event:20260629-153000123-kv-cache-blockers -->
-          - task_id: kv-cache-blockers
-          - input: ...
-          - summary: ...
-          - status: in_progress
-          - next_action: ...
-    """
-    events: list[dict] = []
-    in_timeline = False
-    current_event: dict | None = None
-    current_key: str | None = None
-    # Track parentages: event lines start with "- ", sub-items with "  - "
-    _event_line_re = re.compile(r"^- (\S+)\s*<!--\s*event:(.+?)\s*-->")
-    _sub_kv_re = re.compile(r"^  - ([a-z_]+):\s*(.*)")
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped == "## Timeline":
-            in_timeline = True
-            continue
-        if in_timeline and stripped.startswith("## ") and stripped != "## Timeline":
-            if current_event:
-                events.append(current_event)
-                current_event = None
-                current_key = None
-            break
-
-        if in_timeline:
-            ev_match = _event_line_re.match(line)
-            if ev_match:
-                if current_event:
-                    events.append(current_event)
-                current_event = {
-                    "timestamp": ev_match.group(1),
-                    "event_id": ev_match.group(2).strip(),
-                }
-                current_key = None
-                continue
-
-            if current_event is not None:
-                kv_match = _sub_kv_re.match(line)
-                if kv_match:
-                    current_key = kv_match.group(1).strip()
-                    current_event[current_key] = kv_match.group(2).strip()
-                    continue
-                if current_key and line.startswith("    "):
-                    current_event[current_key] = (
-                        current_event.get(current_key, "") + "\n" + line[4:].rstrip()
-                    )
-
-    if current_event:
-        events.append(current_event)
-
-    return events
-
 
 # ── Work Map task parser ─────────────────────────────────
 

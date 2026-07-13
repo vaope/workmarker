@@ -139,7 +139,7 @@ _SUB_KV_RE = re.compile(r"^  - ([a-z_]+):\s*(.*)")
 
 def parse_timeline_events(text: str) -> list[dict]:
     """Parse the Timeline section into a list of event dicts, newest-first.
-    
+
     For v2, uses the stable ``timeline`` section anchor (``<!-- section:timeline -->``).
     For v1, falls back to ``## Timeline`` heading.
     The parsing logic is the same for both schemas.

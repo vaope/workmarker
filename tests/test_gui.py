@@ -8,7 +8,6 @@ from unittest.mock import patch
 
 from workeventagent.gui import (
     _event_id_timestamp,
-    _parse_timeline_events,
     _parse_work_map_tasks,
     _parse_attachments_task_ids,
     _generate_init_markdown,
@@ -35,6 +34,8 @@ from workeventagent.gui import (
     handle_inbox_cancel,
     handle_search,
 )
+from workeventagent.project_schema import parse_timeline_events
+
 from workeventagent.search_store import search_workspace
 from workeventagent.markdown_store import write_project_atomically
 from workeventagent.index_store import get_task, init_db, rebuild_index
@@ -147,7 +148,7 @@ def _deep_update(d, u):
 class TimelineParserTest(unittest.TestCase):
     def test_parses_timeline_events_from_synthetic(self):
         """Fixture uses real append layout: newest (ev2) on top, oldest (ev1) below."""
-        events = _parse_timeline_events(_SYNTHETIC_WITH_TIMELINE)
+        events = parse_timeline_events(_SYNTHETIC_WITH_TIMELINE)
         self.assertEqual(len(events), 2)
         self.assertEqual(events[0]["event_id"], "ev2")
         self.assertEqual(events[0]["summary"], "Making progress.")
@@ -156,13 +157,13 @@ class TimelineParserTest(unittest.TestCase):
 
     def test_empty_timeline_returns_empty(self):
         text = "---\nproject_id: test\n---\n## Timeline\n\n## Other\n"
-        events = _parse_timeline_events(text)
+        events = parse_timeline_events(text)
         self.assertEqual(events, [])
 
     def test_fixture_timeline_is_empty(self):
         """The actual fixture has an empty Timeline section — parser handles this."""
         text = FIXTURE.read_text(encoding="utf-8")
-        events = _parse_timeline_events(text)
+        events = parse_timeline_events(text)
         self.assertEqual(events, [])
 
 

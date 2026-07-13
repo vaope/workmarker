@@ -230,6 +230,17 @@ def _sha256(content: str) -> str:
     return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _restore_backup(backup_path: Path, project_path: Path) -> None:
+    """Restore backup; raise a visible hard error with both paths if it fails."""
+    try:
+        os.replace(str(backup_path), str(project_path))
+    except OSError as exc:
+        raise OSError(
+            f"migration restore failed: cannot restore backup {backup_path} "
+            f"to {project_path} — original error: {exc}"
+        ) from exc
+
+
 # ── Apply ───────────────────────────────────────────────────
 
 def apply_v1_to_v2(
@@ -274,13 +285,13 @@ def apply_v1_to_v2(
         after_identity = identity_manifest(migrated_text)
     except ValueError:
         # Restore backup
-        os.replace(str(backup_path), str(project_path))
+        _restore_backup(backup_path, project_path)
         return {"ok": False, "kind": "migration_verify_failed", "restored": True,
                 "backup_path": str(backup_path), "project_path": str(project_path)}
 
     if after_identity != preview.after_identity:
         # Restore backup
-        os.replace(str(backup_path), str(project_path))
+        _restore_backup(backup_path, project_path)
         return {"ok": False, "kind": "migration_verify_failed", "restored": True,
                 "backup_path": str(backup_path), "project_path": str(project_path)}
 
