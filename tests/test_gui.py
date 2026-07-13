@@ -1748,7 +1748,7 @@ class ReportTest(unittest.TestCase):
         try:
             tasks = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
             task_id = tasks[0]["task_id"]
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            today = datetime.now().astimezone().strftime("%Y-%m-%d")
             self._commit_event(proj, db, task_id, "Fixed a bug", f"{today.replace('-', '')}-event1")
 
             result = handle_generate_report({
