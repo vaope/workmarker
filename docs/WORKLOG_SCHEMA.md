@@ -2,6 +2,7 @@
 topics: [worklog-schema, markdown, agent-protocol]
 doc_kind: protocol
 created: 2026-06-29
+updated: 2026-07-13
 ---
 
 # Worklog Schema
@@ -10,19 +11,110 @@ This file is the operation protocol for WorkEventAgent. Project Markdown files a
 
 **Rendering ownership:** Markdown blocks are deterministically rendered by the wrapper from structured fields (`target`, `event`, `status`, `next_action`). The agent outputs structured JSON only; it does not produce Markdown block content directly.
 
-## Required Frontmatter
+## Schema Version
+
+The current protocol is **schema v2**. New projects use `schema_version: 2`. Existing v1 projects (`schema_version` missing or `1`) remain readable and writable until explicit migration; see "v1 Compatibility" below.
+
+---
+
+## Schema v2
+
+### Required Frontmatter
 
 ```yaml
+---
 project_id: stable-kebab-id
 title: Human readable project title
 doc_kind: work_project
+schema_version: 2
+status: active
+phase: project-knowledge-design
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
+---
 ```
 
-## Required Sections
+- `status` and `phase` are explicit project-level facts. Never infer them from task completion.
+- Frontmatter holds no narrative knowledge, nested task data, risk lists, or technical architecture.
 
-Project documents must contain these sections in order:
+### Stable Section Anchors
+
+Parsers and writers use stable HTML anchors, not visible heading text:
+
+```markdown
+## 项目档案 <!-- section:project-profile -->
+## 当前全景 <!-- section:current-panorama -->
+## 工作地图 <!-- section:work-map -->
+## 技术概览 <!-- section:technical-overview -->
+## 关键认知 <!-- section:project-knowledge -->
+## 关键决策 <!-- section:decisions -->
+## 附件 <!-- section:attachments -->
+## 事件证据 <!-- section:timeline -->
+## 历史摘要 <!-- section:rollups -->
+```
+
+Section IDs are immutable. Visible headings may be translated or rewritten without changing parse semantics.
+
+### Block Ownership
+
+| Section | Ownership | Write Rule |
+|---------|-----------|-----------|
+| project-profile | `reviewed` | Human edits directly; Agent proposes diff |
+| current-panorama | `derived-reviewed` | Generated; confirmed before write |
+| work-map | `structured` | Typed data & deterministic renderer only |
+| technical-overview | `reviewed` | Agent proposal + evidence + confirmation |
+| project-knowledge | `reviewed` | Agent proposal + evidence + confirmation |
+| decisions | `append-only` | Append explicit decisions |
+| attachments | `append-only` | Use existing attachment protocol |
+| timeline | `append-only` | Use existing event & correction protocol |
+| rollups | `derived` | Deterministic report/synthesis may regenerate |
+
+### Human-Readable Work Map
+
+Schema v2 uses stable headings and visible checkboxes:
+
+```markdown
+### 工作项：统一捕获 <!-- item:unified-capture -->
+
+让主窗口与快速捕获使用同一套持久化 Inbox 生命周期。
+
+#### [x] 任务：主窗口先写 Inbox <!-- task:main-capture-inbox -->
+
+- 下一步：补充解析完成通知
+<!-- task-meta:last_event_id=20260712-main-capture-inbox -->
+```
+
+- `[ ]` maps to `in_progress`, `[x]` maps to `done`.
+- `item_id` and `task_id` anchors remain stable.
+- Checkbox and control metadata are deterministically rendered by the wrapper.
+- Raw `status: in_progress` fields are absent from visible text.
+- Parsers depend on anchors and heading boundaries, not visible title text.
+
+### Work Map Grammar (v2)
+
+```
+item       = (item_v2_heading bg_line* task*)
+item_v2_heading = "### 工作项：" title "<!-- item:" item_id "-->"
+bg_line    = any non-heading, non-"- " structured line before first task
+task       = (task_v2_heading next_action_line task_meta_line)
+task_v2_heading = "#### [" (" " / "x") "] 任务：" title "<!-- task:" task_id "-->"
+next_action_line = "- 下一步：" text
+task_meta_line = "<!-- task-meta:last_event_id=" event_id "-->"
+```
+
+### Review-Protected Writes
+
+- `reviewed` content must never be silently overwritten.
+- Every non-append write validates a base hash and rejects stale input.
+- The client exposes ownership badges and source affordances; never shows control metadata.
+
+---
+
+## Schema v1 (Compatibility)
+
+V1 projects remain supported until explicit migration. The sections below describe the v1 protocol. V1 uses legacy English headings without stable anchors.
+
+### Required Sections (v1)
 
 1. `Current Snapshot`
 2. `Work Map`
@@ -31,50 +123,49 @@ Project documents must contain these sections in order:
 5. `Timeline`
 6. `Daily / Weekly Rollups`
 
-## Mutability Rules
+### Work Map Grammar (v1)
 
-- `Timeline`: append-only. Never edit or delete prior events.
-- `Work Map`: source of item/task structure and current task state. Update only the targeted anchored task block.
-- `Current Snapshot`: may be regenerated because it is derived.
-- `Decisions`: append new decisions; do not rewrite old decisions without a correction event.
-- `Attachments`: append attachment records.
-- `Daily / Weekly Rollups`: derived view; may be regenerated.
-
-## Truth Model
-
-Work Map and Timeline are complementary truth sources:
-
-- Work Map owns item/task existence, hierarchy, status, and next action.
-- Timeline owns append-only history of updates and corrections.
-- Current Snapshot and rollups are derived views.
-- SQLite rebuild uses Work Map for current state and Timeline for history.
-
-## Stable IDs
-
-Every project, item, task, and event must have a stable ID.
-
-ID format:
-
-- lowercase kebab-case
-- ASCII preferred
-- stable across title changes
-- unique within its parent scope
-
-Event ID format:
-
-- `YYYYMMDD-HHMMSSmmm-task-id`
-- append `-2`, `-3`, etc. on collision
-- generated by the wrapper after reading existing Timeline event anchors
-- not generated by the LLM agent
-
-Anchor comments:
-
-```md
-### Item: KV cache few-shot optimization <!-- item:kv-cache-few-shot -->
-#### Task: Review current blockers <!-- task:kv-cache-blockers -->
+```
+item       = (item_v1_heading bg_line* task*)
+item_v1_heading = "### Item: " title "<!-- item:" item_id "-->"
+bg_line    = "- background: " text
+task       = (task_v1_heading meta*)
+task_v1_heading = "#### Task: " title "<!-- task:" task_id "-->"
+meta       = "- status: " ("in_progress" / "done") / "- next_action: " text / "- last_event_id: " id
 ```
 
-Timeline events must reference affected task IDs:
+### Migration
+
+V1→v2 migration is explicit: preview → confirm → backup → atomic replace → identity verification. See F007 design for the full migration contract.
+
+---
+
+## Common Rules (v1 + v2)
+
+### Mutability
+
+- `Timeline`: append-only. Never edit or delete prior events.
+- `Work Map`: update only the targeted anchored task block.
+- `Current Snapshot` / `Current Panorama`: may be regenerated (derived).
+- `Decisions`: append new decisions; do not rewrite old decisions without a correction event.
+- `Attachments`: append attachment records.
+- `Rollups`: derived view; may be regenerated.
+
+### Truth Model
+
+Work Map and Timeline are complementary truth sources:
+- Work Map owns item/task existence, hierarchy, status, and next action.
+- Timeline owns append-only history of updates and corrections.
+- Current Snapshot / Panorama and rollups are derived views.
+- SQLite rebuild uses Work Map for current state and Timeline for history.
+
+### Stable IDs
+
+- Format: lowercase kebab-case, ASCII preferred, stable across title changes, unique within parent scope.
+- Event ID format: `YYYYMMDD-HHMMSSmmm-task-id` (with collision suffix `-2`, `-3`).
+- Event IDs are generated by the wrapper, never by the LLM agent.
+
+### Timeline Events
 
 ```md
 - 2026-06-29T15:30:00.123+08:00 <!-- event:20260629-153000123-kv-cache-blockers -->
@@ -85,35 +176,9 @@ Timeline events must reference affected task IDs:
   - next_action: Map the current inference chain.
 ```
 
-## Confirmation Proposal
+### Correction Events
 
-Before writing, the wrapper must show a proposal with:
-
-- target `project_id`, `item_id`, `task_id`
-- confidence and reason
-- append-only Timeline event
-- targeted Work Map block update
-- status and next action
-- attachment paths
-- changed file path and anchor
-
-The user must choose `confirm`, `edit`, or `cancel`. `edit` modifies the proposal and returns to confirmation; it must not write.
-
-If the proposal creates a new item or task, it must show `new_item` or `new_task`, the generated stable ID, the target parent, and the exact Markdown block to insert. The write is allowed only after explicit user confirmation.
-
-## Ambiguity Rules
-
-The agent must ask a question instead of writing when:
-
-- project match is uncertain
-- item/task match is uncertain
-- multiple tasks are plausible
-- the input contains progress but no clear target
-- the requested write would create a project automatically
-
-## Correction Events
-
-Incorrect confirmed archives are corrected by appending a new Timeline event.
+Never edit or remove the original Timeline event. Append a correction:
 
 ```md
 - 2026-06-29T16:00:00.000+08:00 <!-- event:20260629-160000000-kv-cache-blockers-correction -->
@@ -123,46 +188,22 @@ Incorrect confirmed archives are corrected by appending a new Timeline event.
   - corrected_task_id: kv-cache-prefix-reuse
 ```
 
-Never edit or remove the original Timeline event.
+### Confirmation Proposal
 
-## Attachment Rules
+Before writing, show: target `project_id`/`item_id`/`task_id`, confidence, reason, append-only Timeline event, targeted Work Map block update, status, next action, attachment paths, changed file path and anchor. User chooses `confirm` | `edit` | `cancel`.
 
-Images and files are archived as paths only in MVP.
+### Ambiguity Rules
 
-The wrapper may copy attachments into a project-local attachment folder. The agent must not claim to understand image content unless a later feature explicitly adds image parsing.
+Ask instead of writing when: project/item/task match uncertain, multiple tasks plausible, progress with no clear target, or auto-creating a project.
 
-Recommended attachment record:
+### SQLite Rebuild
 
-```md
-- 2026-06-29T15:30:00+08:00
-  - path: attachments/2026-06-29/example.png
-  - related_task_id: kv-cache-blockers
-  - note: User-provided archived image.
-```
+SQLite indexes Markdown state. Rebuild from frontmatter (metadata), Work Map anchors (structure, status), Timeline events (history, corrections), and Attachments (file paths). Markdown wins over SQLite on conflict.
 
-## SQLite Rebuild Rules
+### Concurrency
 
-SQLite indexes Markdown state. Rebuild by scanning:
+MVP assumes single writer per project document.
 
-- frontmatter for project metadata
-- Work Map anchors for item/task structure and current state
-- Timeline events for history, corrections, and last event
-- Attachments for related file paths
+### Split Rule
 
-If SQLite and Markdown conflict, Markdown wins. Within Markdown, Work Map is authoritative for current state and Timeline is authoritative for historical record.
-
-## Concurrency Assumption
-
-MVP assumes a single writer per project document. The wrapper must avoid launching concurrent writes to the same project. Locking and merge conflict handling are later features.
-
-## Split Rule
-
-MVP keeps one Markdown file per project. Future split is allowed when a project file becomes too large.
-
-Reserved migration rule:
-
-- keep the project file as the overview
-- move a large Item into its own file
-- preserve `item_id` and all `task_id` values
-- replace the moved Item in the project file with a summary and link
-- record the migration in Timeline or Decisions
+MVP keeps one Markdown file per project. Reserved future rule: keep project file as overview, move Item into own file, preserve all IDs, record migration in Timeline/Decisions.
