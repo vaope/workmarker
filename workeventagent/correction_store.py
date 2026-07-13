@@ -92,11 +92,12 @@ def correct_event_same_project(
 
     correction_block = "\n".join(correction_lines)
 
-    # Append correction event to ## Timeline section
+    # Append correction event to ## Timeline section (v1) or ## 事件证据 section (v2)
     timeline_match = re.search(r"## Timeline\n", original_text)
     if not timeline_match:
+        timeline_match = re.search(r"## 事件证据.*\n", original_text)
+    if not timeline_match:
         return {"ok": False, "kind": "invalid_doc", "error": "timeline section not found"}
-
     insert_at = timeline_match.end()
     new_text = original_text[:insert_at] + correction_block + "\n\n" + original_text[insert_at:]
 
@@ -166,8 +167,10 @@ def _task_exists_in_project(text: str, task_id: str) -> bool:
 def _append_event_to_timeline(
     text: str, event_lines: list[str], insert_after_original_event_id: str = "",
 ) -> str:
-    """Append event lines right after ## Timeline header."""
+    """Append event lines right after ## Timeline header (v1 or v2)."""
     timeline_match = re.search(r"## Timeline\n", text)
+    if not timeline_match:
+        timeline_match = re.search(r"## 事件证据.*\n", text)
     if not timeline_match:
         raise ValueError("timeline section not found")
     insert_at = timeline_match.end()
@@ -176,7 +179,7 @@ def _append_event_to_timeline(
 
 
 def _update_task_in_work_map(text: str, task_id: str, status: str, next_action: str, event_id: str) -> str:
-    """Update status, next_action, and last_event_id for a task in Work Map."""
+    """Update status, next_action, and last_event_id for a task in Work Map (v1 only)."""
     task_pattern = re.compile(
         rf"(#### Task: .+? <!-- task:{re.escape(task_id)} -->\n"
         rf"- status: )[^\n]*(\n- next_action: )[^\n]*(\n- last_event_id: )[^\n]*",

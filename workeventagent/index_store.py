@@ -4,8 +4,49 @@ import re
 import sqlite3
 from pathlib import Path
 
-from workeventagent.project_schema import parse_frontmatter, parse_attachment_records
+from workeventagent.project_schema import parse_frontmatter, schema_version
 from workeventagent.work_map_store import parse_work_map
+
+
+def _parse_v1_attachments(text: str) -> list[dict]:
+    """Legacy v1 attachment parser for index rebuild."""
+    attachments: list[dict] = []
+    in_attachments = False
+    attach_path_re = re.compile(r"^\s*-\s*path:\s*(.*)$")
+    attach_task_re = re.compile(r"^\s*-\s*related_task_id:\s*(.*)$")
+    attach_note_re = re.compile(r"^\s*-\s*note:\s*(.*)$")
+    current_attachment: dict | None = None
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "## Attachments":
+            in_attachments = True
+            continue
+        if in_attachments and stripped.startswith("## ") and stripped != "## Attachments":
+            break
+
+        if in_attachments:
+            path_match = attach_path_re.match(line)
+            if path_match:
+                if current_attachment is not None:
+                    attachments.append(current_attachment)
+                current_attachment = {"path": path_match.group(1).strip(), "task_id": "", "note": ""}
+                continue
+
+            if current_attachment is not None:
+                task_match = attach_task_re.match(line)
+                if task_match:
+                    current_attachment["task_id"] = task_match.group(1).strip()
+                    continue
+                note_match = attach_note_re.match(line)
+                if note_match:
+                    current_attachment["note"] = note_match.group(1).strip()
+                    continue
+
+    if current_attachment is not None:
+        attachments.append(current_attachment)
+
+    return attachments
 
 
 def init_db(db_path: Path) -> None:
@@ -63,8 +104,8 @@ def rebuild_index(db_path: Path, project_paths: list[Path]) -> None:
 
         for task in doc["tasks"]:
             conn.execute(
-                "INSERT INTO tasks (task_id, project_id, item_id, title, status, next_action, doc_path, doc_anchor, last_event_id)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO tasks (task_id, project_id, item_id, title, status, next_action, doc_path, doc_anchor, last_event_id)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task["task_id"],
                     project_id,
@@ -110,35 +151,30 @@ def _parse_project_document(text: str, project_path: Path) -> dict:
     project_id = frontmatter.get("project_id", "")
     title = frontmatter.get("title", "")
     updated_at = frontmatter.get("updated", "")
+    v = schema_version(text)
 
     tasks: list[dict] = []
-    try:
-        items = parse_work_map(text)
-        for item in items:
-            for task in item.get("tasks", []):
-                tasks.append({
-                    "task_id": task["task_id"],
-                    "item_id": item["item_id"],
-                    "title": task["title"],
-                    "status": task.get("status", ""),
-                    "next_action": task.get("next_action", ""),
-                    "last_event_id": task.get("last_event_id", ""),
-                    "doc_anchor": f"task:{task['task_id']}",
-                })
-    except ValueError:
-        pass
-
     attachments_list: list[dict] = []
-    try:
-        records = parse_attachment_records(text)
-        for rec in records:
-            attachments_list.append({
-                "path": rec.get("path", ""),
-                "task_id": rec.get("related_task_id", ""),
-                "note": rec.get("note", ""),
-            })
-    except ValueError:
-        pass
+
+    if v >= 2:
+        try:
+            items = parse_work_map(text)
+            for item in items:
+                for task in item.get("tasks", []):
+                    tasks.append({
+                        "task_id": task["task_id"],
+                        "item_id": item["item_id"],
+                        "title": task["title"],
+                        "status": task.get("status", ""),
+                        "next_action": task.get("next_action", ""),
+                        "last_event_id": task.get("last_event_id", ""),
+                        "doc_anchor": f"task:{task['task_id']}",
+                    })
+        except ValueError:
+            pass
+    else:
+        tasks = _parse_v1_tasks(text)
+        attachments_list = _parse_v1_attachments(text)
 
     return {
         "project_id": project_id,
@@ -147,3 +183,67 @@ def _parse_project_document(text: str, project_path: Path) -> dict:
         "tasks": tasks,
         "attachments": attachments_list,
     }
+
+
+def _parse_v1_tasks(text: str) -> list[dict]:
+    """Legacy v1 task parser for index rebuild (preserves exact behavior)."""
+    tasks: list[dict] = []
+    current_item_id = ""
+    in_work_map = False
+
+    task_re = re.compile(r"^####\s+Task:\s+(.+?)\s*<!--\s*task:(.+?)\s*-->\s*$")
+    item_re = re.compile(r"^###\s+Item:\s+(.+?)\s*<!--\s*item:(.+?)\s*-->\s*$")
+    status_re = re.compile(r"^-\s*status:\s*(.*)$")
+    next_action_re = re.compile(r"^-\s*next_action:\s*(.*)$")
+    last_event_re = re.compile(r"^-\s*last_event_id:\s*(.*)$")
+
+    current_task: dict | None = None
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "## Work Map":
+            in_work_map = True
+            continue
+        if in_work_map and stripped.startswith("## ") and stripped != "## Work Map":
+            break
+
+        if in_work_map:
+            item_match = item_re.match(line)
+            if item_match:
+                current_item_id = item_match.group(2).strip()
+                current_task = None
+                continue
+
+            task_match = task_re.match(line)
+            if task_match:
+                if current_task is not None:
+                    tasks.append(current_task)
+                current_task = {
+                    "task_id": task_match.group(2).strip(),
+                    "item_id": current_item_id,
+                    "title": task_match.group(1).strip(),
+                    "status": "",
+                    "next_action": "",
+                    "last_event_id": "",
+                    "doc_anchor": f"task:{task_match.group(2).strip()}",
+                }
+                continue
+
+            if current_task is not None:
+                status_match = status_re.match(line)
+                if status_match:
+                    current_task["status"] = status_match.group(1).strip()
+                    continue
+                next_match = next_action_re.match(line)
+                if next_match:
+                    current_task["next_action"] = next_match.group(1).strip()
+                    continue
+                event_match = last_event_re.match(line)
+                if event_match:
+                    current_task["last_event_id"] = event_match.group(1).strip()
+                    continue
+
+    if current_task is not None:
+        tasks.append(current_task)
+
+    return tasks

@@ -121,10 +121,12 @@ class ProjectDocument:
             f"{self._render_timeline_field('status', event.status)}"
             f"{self._render_timeline_field('next_action', event.next_action)}"
         )
-        # Insert before the first ##  after ## Timeline
-        timeline_match = re.search(r"(## Timeline\s*\n)", body)
+        # Find Timeline section in body (v1 or v2)
+        timeline_match = re.search(r"## Timeline\n", body)
         if not timeline_match:
-            raise ValueError("## Timeline section not found")
+            timeline_match = re.search(r"## 事件证据.*\n", body)
+        if not timeline_match:
+            raise ValueError("Timeline section not found")
         insert_pos = timeline_match.end()
         return body[:insert_pos] + timeline_entry + body[insert_pos:]
 
@@ -148,11 +150,11 @@ class ProjectDocument:
 
     def _insert_new_item_with_task(self, proposal: ArchiveProposal) -> str:
         target = proposal.target
-        work_map_match = re.search(r"(## Work Map\s*\n)", self.body)
+        work_map_match = re.search(r"^##.*(?:Work Map|工作地图).*\n", self.body, re.MULTILINE)
         if not work_map_match:
-            raise ValueError("## Work Map section not found")
+            raise ValueError("Work Map section not found")
 
-        section_match = re.search(r"^## (?!Work Map\b).*$", self.body[work_map_match.end():], re.MULTILINE)
+        section_match = re.search(r"^## (?!.*(?:Work Map|工作地图)).*$", self.body[work_map_match.end():], re.MULTILINE)
         insert_pos = work_map_match.end() + section_match.start() if section_match else len(self.body)
         item_title = target.item_title or target.item_id
         block = (

@@ -957,8 +957,13 @@ def handle_init(request: dict) -> dict:
 
     now = datetime.now(timezone.utc)
     date_str = now.strftime("%Y-%m-%d")
-
-    markdown = _generate_init_markdown(project_id, title, date_str, items_spec)
+    use_v2 = request.get("schema_version") == 2 or request.get("status") or request.get("phase")
+    if use_v2:
+        status = request.get("status", "active")
+        phase = request.get("phase", "planning")
+        markdown = render_new_project_v2(project_id, title, date_str, items_spec, status, phase)
+    else:
+        markdown = _generate_init_markdown(project_id, title, date_str, items_spec)
     workspace.mkdir(parents=True, exist_ok=True)
     project_path.write_text(markdown, encoding="utf-8")
 
@@ -1303,9 +1308,72 @@ def _update_task_attr(text: str, task_id: str, field: str, value: str) -> str:
     )
 
 
+def render_new_project_v2(
+    project_id: str, title: str, date_str: str, items_spec: list[dict],
+    status: str = "active", phase: str = "planning",
+) -> str:
+    if not status or not phase:
+        raise ValueError("status and phase are required")
+    lines: list[str] = []
+    lines.append("---")
+    lines.append(f"project_id: {project_id}")
+    lines.append(f"title: {title}")
+    lines.append("doc_kind: work_project")
+    lines.append("schema_version: 2")
+    lines.append(f"status: {status}")
+    lines.append(f"phase: {phase}")
+    lines.append(f"created: {date_str}")
+    lines.append(f"updated: {date_str}")
+    lines.append("---")
+    lines.append("")
+    lines.append(f"# {title}")
+    lines.append("")
+
+    # All nine anchored sections in approved order
+    sections = [
+        ("project-profile", "## 项目档案 <!-- section:project-profile -->\n\n### 背景\n\n### 目标\n\n### 范围\n\n### 成功标准\n"),
+        ("current-panorama", "## 当前全景 <!-- section:current-panorama -->\n"),
+        ("work-map", "## 工作地图 <!-- section:work-map -->\n"),
+        ("technical-overview", "## 技术概览 <!-- section:technical-overview -->\n"),
+        ("project-knowledge", "## 关键认知 <!-- section:project-knowledge -->\n"),
+        ("decisions", "## 关键决策 <!-- section:decisions -->\n"),
+        ("attachments", "## 附件 <!-- section:attachments -->\n"),
+        ("timeline", "## 事件证据 <!-- section:timeline -->\n"),
+        ("rollups", "## 历史摘要 <!-- section:rollups -->\n"),
+    ]
+
+    for section_id, heading in sections:
+        if section_id == "work-map":
+            lines.append(heading)
+            lines.append("")
+            existing_item_ids: set[str] = set()
+            existing_task_ids: set[str] = set()
+            for item_spec in items_spec:
+                item_title = item_spec.get("title", "")
+                item_id = make_unique_stable_id(item_title, existing_item_ids)
+                existing_item_ids.add(item_id)
+                lines.append(f"### 工作项：{item_title} <!-- item:{item_id} -->")
+                lines.append("")
+                for task_title in item_spec.get("tasks", []):
+                    task_id = make_unique_stable_id(task_title, existing_task_ids)
+                    existing_task_ids.add(task_id)
+                    lines.append(f"#### [ ] 任务：{task_title} <!-- task:{task_id} -->")
+                    lines.append("- 下一步：")
+                    lines.append(f"<!-- task-meta:last_event_id= -->")
+                    lines.append("")
+                if not item_spec.get("tasks"):
+                    lines.append("")
+        else:
+            lines.append(heading)
+            lines.append("")
+
+    return "\n".join(lines)
+
+
 def _generate_init_markdown(
     project_id: str, title: str, date_str: str, items_spec: list[dict]
 ) -> str:
+    """Legacy v1 init — preserved for test compatibility."""
     lines: list[str] = []
     lines.append("---")
     lines.append(f"project_id: {project_id}")
