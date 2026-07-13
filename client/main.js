@@ -402,6 +402,56 @@ function attachIpc() {
     return { ok: true, reportSchedule: c.reportSchedule || {} };
   });
 
+  // ---- project panorama --------------------------------------------------
+
+  ipcMain.handle('wea:projectPanorama', async (_e, { projectPath }) =>
+    callBackend('project_panorama', { project_path: projectPath }, cfg().pythonCmd));
+
+  ipcMain.handle('wea:previewProjectMigration', async (_e, request) =>
+    callBackend('project_migration_preview', {
+      project_path: request.projectPath,
+      status: request.status,
+      phase: request.phase,
+    }, cfg().pythonCmd));
+
+  ipcMain.handle('wea:applyProjectMigration', async (_e, request) => {
+    const c = cfg();
+    return callBackend('project_migration_apply', {
+      project_path: request.projectPath,
+      db_path: dbPathFor(c.workspace),
+      source_hash: request.sourceHash,
+      status: request.status,
+      phase: request.phase,
+    }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:updateProjectProfile', async (_e, request) => {
+    const c = cfg();
+    return callBackend('update_project_profile', {
+      project_path: request.projectPath,
+      db_path: dbPathFor(c.workspace),
+      base_section_hash: request.baseSectionHash,
+      base_metadata_hash: request.baseMetadataHash,
+      status: request.status,
+      phase: request.phase,
+      background: request.background || '',
+      goal: request.goal || '',
+      scope: request.scope || '',
+      success_criteria: request.successCriteria || '',
+    }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:updateProjectSection', async (_e, request) => {
+    const c = cfg();
+    return callBackend('update_project_section', {
+      project_path: request.projectPath,
+      db_path: dbPathFor(c.workspace),
+      section_id: request.sectionId,
+      base_section_hash: request.baseSectionHash,
+      content: request.content,
+    }, c.pythonCmd);
+  });
+
   ipcMain.on('wea:hideCapture', () => { if (captureWindow) captureWindow.hide(); });
   ipcMain.on('wea:resizeCapture', (_e, height) => {
     if (!captureWindow) return;

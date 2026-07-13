@@ -40,6 +40,16 @@ contextBridge.exposeInMainWorld('wea', {
   correctionRecoveries: () => ipcRenderer.invoke('wea:correctionRecoveries'),
   resumeCorrection: (correctionId) => ipcRenderer.invoke('wea:resumeCorrection', { correctionId }),
 
+  // --- project panorama ---
+  getProjectPanorama: (projectPath) => ipcRenderer.invoke('wea:projectPanorama', { projectPath }),
+  previewProjectMigration: (projectPath, status, phase) =>
+    ipcRenderer.invoke('wea:previewProjectMigration', { projectPath, status, phase }),
+  applyProjectMigration: (projectPath, sourceHash, status, phase) =>
+    ipcRenderer.invoke('wea:applyProjectMigration', { projectPath, sourceHash, status, phase }),
+  updateProjectProfile: (request) => ipcRenderer.invoke('wea:updateProjectProfile', request || {}),
+  updateProjectSection: (sectionId, baseSectionHash, content, projectPath) =>
+    ipcRenderer.invoke('wea:updateProjectSection', { sectionId, baseSectionHash, content, projectPath }),
+
   // --- clipboard / attachments ---
   readClipboardImage: () => ipcRenderer.invoke('wea:readClipboardImage'),
   discardPending: (tempPaths) => ipcRenderer.invoke('wea:discardPending', { tempPaths: tempPaths || [] }),
