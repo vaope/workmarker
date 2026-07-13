@@ -105,6 +105,8 @@ def _main_impl() -> None:
         "correct_event": handle_correct_event,
         "correction_recoveries": handle_correction_recoveries,
         "resume_correction": handle_resume_correction,
+        "project_migration_preview": handle_project_migration_preview,
+        "project_migration_apply": handle_project_migration_apply,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -1813,6 +1815,42 @@ def _dict_to_proposal(data: dict) -> ArchiveProposal:
         ),
         attachment_paths=tuple(data.get("attachment_paths", [])),
     )
+
+
+# ── migration ───────────────────────────────────────────────
+
+def handle_project_migration_preview(request: dict) -> dict:
+    from workeventagent.project_migration import preview_v1_to_v2
+    project_path = Path(request["project_path"])
+    text = project_path.read_text(encoding="utf-8")
+    status = request.get("status", "active")
+    phase = request.get("phase", "planning")
+    try:
+        preview = preview_v1_to_v2(text, status, phase)
+    except ValueError as e:
+        return {"ok": False, "kind": "invalid_input", "error": str(e)}
+    return {
+        "ok": True,
+        "migration": {
+            "source_schema": preview.source_schema,
+            "target_schema": preview.target_schema,
+            "source_hash": preview.source_hash,
+            "diff": preview.diff,
+            "summary": preview.summary,
+            "status": status,
+            "phase": phase,
+        },
+    }
+
+
+def handle_project_migration_apply(request: dict) -> dict:
+    from workeventagent.project_migration import apply_v1_to_v2
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    source_hash = request["source_hash"]
+    status = request.get("status", "active")
+    phase = request.get("phase", "planning")
+    return apply_v1_to_v2(project_path, db_path, source_hash, status, phase)
 
 
 if __name__ == "__main__":
