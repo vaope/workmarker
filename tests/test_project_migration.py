@@ -82,6 +82,21 @@ def test_apply_restores_backup_when_readback_identity_fails(tmp_path: Path, monk
     assert project.read_text(encoding="utf-8") == original
 
 
+def test_migration_injects_missing_sections_in_correct_order() -> None:
+    """Regression: v1 doc missing both project-knowledge and technical-overview
+    must have both injected, with project-knowledge before technical-overview."""
+    source = Path("tests/fixtures/multimodal-labeling.md").read_text(encoding="utf-8")
+    assert "## 关键认知" not in source
+    assert "## 技术概览" not in source
+    preview = preview_v1_to_v2(source, status="active", phase="delivery")
+    text = preview.migrated_text
+    assert "## 关键认知" in text
+    assert "## 技术概览" in text
+    pk_pos = text.index("## 关键认知")
+    to_pos = text.index("## 技术概览")
+    assert to_pos < pk_pos, "technical-overview must appear before project-knowledge"
+
+
 def test_preview_requires_explicit_status_and_phase() -> None:
     source = Path("tests/fixtures/multimodal-labeling.md").read_text(encoding="utf-8")
     with pytest.raises(ValueError, match="status"):

@@ -212,8 +212,8 @@ def _transform_v1_to_v2(text: str, status: str, phase: str) -> str:
 def _inject_missing_sections(text: str) -> str:
     """Inject any sections that don't exist yet (Tech Overview, Project Knowledge)."""
     sections_to_inject = [
-        ("## 技术概览 <!-- section:technical-overview -->\n\n", "project-knowledge"),
         ("## 关键认知 <!-- section:project-knowledge -->\n\n", "decisions"),
+        ("## 技术概览 <!-- section:technical-overview -->\n\n", "project-knowledge"),
     ]
     for section_line, after_section_id in sections_to_inject:
         if section_line.strip() not in text:

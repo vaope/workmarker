@@ -72,7 +72,7 @@ def update_frontmatter(text: str, fields: dict[str, str]) -> str:
     for key in sorted(fm):
         lines.append(f"{key}: {fm[key]}")
     lines.append("---")
-    return "\n".join(lines) + text[text.index(parts[2], len(parts[0]) + 3 + len(parts[1])) - 3:]
+    return "\n".join(lines) + parts[2]
 
 
 def metadata_hash(text: str) -> str:

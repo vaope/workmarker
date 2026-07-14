@@ -11,6 +11,7 @@ from workeventagent.project_schema import (
     schema_version,
     section_content,
     section_hash,
+    update_frontmatter,
     validate_reviewed_content,
 )
 
@@ -70,3 +71,11 @@ def test_frontmatter_and_metadata_hash_are_explicit() -> None:
     assert schema_version(V2) == 2
     assert parse_frontmatter(V2)["phase"] == "build"
     assert metadata_hash(V2).startswith("sha256:")
+
+
+def test_update_frontmatter_does_not_emit_six_dashes() -> None:
+    """B5 regression: update_frontmatter must produce exactly one --- delimiter, not ------."""
+    updated = update_frontmatter(V2, {"status": "completed"})
+    assert "------" not in updated
+    assert updated.count("---") == 2
+    assert updated.startswith("---\n")

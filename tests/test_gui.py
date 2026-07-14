@@ -2340,5 +2340,134 @@ class V2PanoramaTests(unittest.TestCase):
         self.assertEqual(self.project.read_text(encoding="utf-8"), before)
 
 
+class V2MutationTest(unittest.TestCase):
+    """Delete/update handlers must work correctly on schema v2 documents."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ws = Path(self.tmp.name)
+        self.db = self.ws / "index.sqlite"
+        init_db(self.db)
+        self.project = self.ws / "report-project.md"
+        self.project.write_text(
+            Path("tests/fixtures/project-v2.md").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    # ── delete_item v2 ───────────────────────────────────
+
+    def test_delete_item_v2_removes_item_and_its_tasks(self):
+        before = handle_tasks({"project_path": str(self.project)})
+        self.assertEqual(len(before["items"]), 2)
+        capture = next(it for it in before["items"] if it["item_id"] == "capture")
+        self.assertGreater(len(capture["tasks"]), 0)
+
+        result = handle_delete_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "capture",
+        })
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["item_id"], "capture")
+        self.assertGreater(result["deleted_task_count"], 0)
+
+        after = handle_tasks({"project_path": str(self.project)})
+        self.assertEqual(len(after["items"]), 1)
+        self.assertEqual(after["items"][0]["item_id"], "reporting")
+
+    def test_delete_item_v2_preserves_sibling_item_and_tasks(self):
+        before = handle_tasks({"project_path": str(self.project)})
+        reporting = next(it for it in before["items"] if it["item_id"] == "reporting")
+        reporting_task_count = len(reporting["tasks"])
+
+        handle_delete_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "capture",
+        })
+        after = handle_tasks({"project_path": str(self.project)})
+        self.assertEqual(len(after["items"]), 1)
+        survivor = after["items"][0]
+        self.assertEqual(survivor["item_id"], "reporting")
+        self.assertEqual(len(survivor["tasks"]), reporting_task_count)
+
+    # ── delete_task v2 ───────────────────────────────────
+
+    def test_delete_task_v2_removes_only_target(self):
+        before = handle_tasks({"project_path": str(self.project)})
+        capture = next(it for it in before["items"] if it["item_id"] == "capture")
+        self.assertEqual(len(capture["tasks"]), 2)
+
+        result = handle_delete_task({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "task_id": "persist-card",
+        })
+        self.assertTrue(result["ok"], result)
+
+        after = handle_tasks({"project_path": str(self.project)})
+        capture_after = next(it for it in after["items"] if it["item_id"] == "capture")
+        self.assertEqual(len(capture_after["tasks"]), 1)
+        self.assertEqual(capture_after["tasks"][0]["task_id"], "route-archive")
+
+    def test_delete_task_v2_preserves_other_item(self):
+        handle_delete_task({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "task_id": "persist-card",
+        })
+        after = handle_tasks({"project_path": str(self.project)})
+        reporting = next(it for it in after["items"] if it["item_id"] == "reporting")
+        self.assertEqual(len(reporting["tasks"]), 1)
+        self.assertEqual(reporting["tasks"][0]["task_id"], "weekly-summary")
+
+    # ── update_task v2 ───────────────────────────────────
+
+    def test_update_task_v2_status(self):
+        result = handle_update_task({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "task_id": "route-archive",
+            "field": "status",
+            "value": "done",
+        })
+        self.assertTrue(result["ok"], result)
+
+        after = handle_tasks({"project_path": str(self.project)})
+        capture = next(it for it in after["items"] if it["item_id"] == "capture")
+        route = next(t for t in capture["tasks"] if t["task_id"] == "route-archive")
+        self.assertEqual(route["status"], "done")
+
+    def test_update_task_v2_title(self):
+        result = handle_update_task({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "task_id": "persist-card",
+            "field": "title",
+            "value": "Persist v2 card",
+        })
+        self.assertTrue(result["ok"], result)
+
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("Persist v2 card", text)
+        self.assertIn("<!-- task:persist-card -->", text)
+
+    def test_update_task_v2_next_action(self):
+        result = handle_update_task({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "task_id": "route-archive",
+            "field": "next_action",
+            "value": "Wire v2 inbox.",
+        })
+        self.assertTrue(result["ok"], result)
+
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("Wire v2 inbox.", text)
+
+
 if __name__ == "__main__":
     unittest.main()

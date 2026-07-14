@@ -251,8 +251,8 @@ def _find_task_heading(text: str, task_id: str) -> tuple[int, int, int]:
 
 
 def _find_next_block_boundary(text: str, pos: int) -> int:
-    """Return the byte position of the next ``####`` or ``##`` heading, or end of text."""
-    m = re.search(r"^(####|##)\s", text[pos:], re.MULTILINE)
+    """Return the byte position of the next ``####``, ``###``, or ``##`` heading, or end of text."""
+    m = re.search(r"^(#{2,4})\s", text[pos:], re.MULTILINE)
     return pos + m.start() if m else len(text)
 
 
@@ -277,7 +277,7 @@ def update_task_field(text: str, task_id: str, field: str, value: str, updated_d
         replacement = "\n" + render_v2_task(task)
     else:
         replacement = "\n" + render_v1_task(task)
-    return text[:end] + replacement + text[block_end:]
+    return text[:start] + replacement + text[block_end:]
 
 
 def update_task_state(text: str, task_id: str, status: str, next_action: str = "", last_event_id: str = "") -> str:
@@ -300,7 +300,7 @@ def update_task_state(text: str, task_id: str, status: str, next_action: str = "
         replacement = "\n" + render_v2_task(task)
     else:
         replacement = "\n" + render_v1_task(task)
-    return text[:end] + replacement + text[block_end:]
+    return text[:start] + replacement + text[block_end:]
 
 
 def insert_item(text: str, item_id: str, title: str, background: str = "") -> str:

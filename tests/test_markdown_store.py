@@ -4,8 +4,10 @@ from pathlib import Path
 
 from workeventagent.markdown_store import ProjectDocument, write_project_atomically
 from workeventagent.models import ArchiveProposal, TargetRef, TimelineEvent
+from workeventagent.project_schema import schema_version, section_content
 
 FIXTURE = Path("tests/fixtures/multimodal-labeling.md")
+V2_FIXTURE = Path("tests/fixtures/project-v2.md")
 
 
 class MarkdownStoreTest(unittest.TestCase):
@@ -109,6 +111,79 @@ class MarkdownStoreTest(unittest.TestCase):
             write_project_atomically(path, "new")
 
             self.assertEqual(path.read_text(encoding="utf-8"), "new")
+
+
+class V2MarkdownStoreTest(unittest.TestCase):
+    def v2_proposal(self):
+        return ArchiveProposal(
+            target=TargetRef(
+                project_id="report-project",
+                item_id="capture",
+                task_id="persist-card",
+                task_title="Persist card",
+            ),
+            confidence=1.0,
+            reason="v2 capture test",
+            event=TimelineEvent(
+                event_id="20260713-120000000-persist-card",
+                task_id="persist-card",
+                input_text="Finished persistence.",
+                summary="Persistence is complete.",
+                status="done",
+                next_action="Add retry.",
+            ),
+        )
+
+    def test_v2_capture_updates_only_target_task_and_appends_timeline(self):
+        """Plan Task 4 Step 1: capture on v2 doc updates the task and appends timeline."""
+        original = V2_FIXTURE.read_text(encoding="utf-8")
+        doc = ProjectDocument.from_text(original)
+        updated = doc.apply_proposal(self.v2_proposal(), updated_date="2026-07-13")
+
+        # Schema stays v2
+        assert schema_version(updated) == 2
+
+        # Task checkbox updated: from [x] to [x] (already done, but should still work)
+        assert "#### [x] 任务：Persist card <!-- task:persist-card -->" in updated
+
+        # Only one a-task heading
+        assert updated.count("<!-- task:persist-card -->") == 1
+
+        # Timeline event appended
+        assert "<!-- event:20260713-120000000-persist-card -->" in updated
+
+        # Sibling task (route-archive) preserved
+        assert "<!-- task:route-archive -->" in updated
+
+        # Decisions section untouched
+        assert section_content(updated, "decisions") == section_content(original, "decisions")
+
+    def test_v2_capture_marks_in_progress_as_done(self):
+        """Capture on an in_progress v2 task changes [ ] to [x]."""
+        original = V2_FIXTURE.read_text(encoding="utf-8")
+        proposal = ArchiveProposal(
+            target=TargetRef(
+                project_id="report-project",
+                item_id="capture",
+                task_id="route-archive",
+                task_title="Route archive",
+            ),
+            confidence=1.0,
+            reason="mark done",
+            event=TimelineEvent(
+                event_id="20260713-130000000-route-archive",
+                task_id="route-archive",
+                input_text="Completed routing.",
+                summary="Routing is done.",
+                status="done",
+                next_action="",
+            ),
+        )
+        doc = ProjectDocument.from_text(original)
+        updated = doc.apply_proposal(proposal, updated_date="2026-07-13")
+
+        assert "#### [x] 任务：Route archive <!-- task:route-archive -->" in updated
+        assert updated.count("<!-- task:route-archive -->") == 1
 
 
 if __name__ == "__main__":

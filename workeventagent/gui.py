@@ -36,7 +36,13 @@ from workeventagent.project_schema import (
     update_frontmatter,
     validate_reviewed_content,
 )
-from workeventagent.work_map_store import parse_work_map
+from workeventagent.work_map_store import (
+    parse_work_map,
+    delete_task as wm_delete_task,
+    delete_item as wm_delete_item,
+    update_task_state as wm_update_task_state,
+    update_task_field as wm_update_task_field,
+)
 from workeventagent.inbox_store import (
     archive_capture,
     cancel_capture,
@@ -1067,6 +1073,16 @@ def _delete_item_block(text: str, item_id: str) -> tuple[str, int]:
 
     Returns (updated_text, deleted_task_count).
     """
+    if schema_version(text) >= 2:
+        items = parse_work_map(text)
+        target = next((it for it in items if it["item_id"] == item_id), None)
+        if target is None:
+            raise ValueError(f"Item anchor not found: <!-- item:{item_id} -->")
+        task_count = len(target["tasks"])
+        updated = wm_delete_item(text, item_id)
+        updated = _bump_updated_text(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        return updated, task_count
+
     item_anchor = f"<!-- item:{item_id} -->"
     lines = text.splitlines(keepends=True)
 
@@ -1126,6 +1142,10 @@ def _delete_task_block(text: str, task_id: str) -> str:
     same as _delete_item_block — not a fixed line-count offset.
     Timeline events referencing this task_id are preserved.
     """
+    if schema_version(text) >= 2:
+        updated = wm_delete_task(text, task_id)
+        return _bump_updated_text(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+
     task_anchor = f"<!-- task:{task_id} -->"
     lines = text.splitlines(keepends=True)
 
@@ -1291,6 +1311,17 @@ def handle_update_task(request: dict) -> dict:
 
 def _update_task_attr(text: str, task_id: str, field: str, value: str) -> str:
     """Update one attribute of a task block. Preserves anchor id."""
+    if schema_version(text) >= 2:
+        if field == "status":
+            updated = wm_update_task_state(text, task_id, value)
+        elif field == "title":
+            updated = wm_update_task_field(text, task_id, "title", value)
+        elif field == "next_action":
+            updated = wm_update_task_field(text, task_id, "next_action", value)
+        else:
+            raise ValueError(f"unsupported field for v2: {field}")
+        return _bump_updated_text(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+
     task_anchor = f"<!-- task:{task_id} -->"
     lines = text.splitlines(keepends=True)
 

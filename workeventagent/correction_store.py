@@ -10,6 +10,8 @@ from pathlib import Path
 from workeventagent.ids import make_event_id
 from workeventagent.index_store import init_db, rebuild_index
 from workeventagent.markdown_store import write_project_atomically
+from workeventagent.project_schema import schema_version
+from workeventagent.work_map_store import update_task_state as _wms_update_task_state
 
 
 _PROJECT_WITH_ONE_EVENT = """---
@@ -102,18 +104,26 @@ def correct_event_same_project(
     new_text = original_text[:insert_at] + correction_block + "\n\n" + original_text[insert_at:]
 
     # Update target task in Work Map
-    task_pattern = re.compile(
-        rf"(#### Task: .+? <!-- task:{re.escape(target_task_id)} -->\n"
-        rf"- status: )[^\n]*(\n- next_action: )[^\n]*(\n- last_event_id: )[^\n]*",
-        re.MULTILINE,
-    )
-    task_match = task_pattern.search(new_text)
-    if task_match:
-        new_text = (
-            new_text[: task_match.start(1)] + task_match.group(1) + status +
-            new_text[task_match.start(2) : task_match.start(3)] + task_match.group(3) + correction_event_id +
-            new_text[task_match.end(3) :]
+    if schema_version(new_text) >= 2:
+        try:
+            new_text = _wms_update_task_state(
+                new_text, target_task_id, status, next_action, correction_event_id,
+            )
+        except ValueError:
+            pass  # task not found; skip update
+    else:
+        task_pattern = re.compile(
+            rf"(#### Task: .+? <!-- task:{re.escape(target_task_id)} -->\n"
+            rf"- status: )[^\n]*(\n- next_action: )[^\n]*(\n- last_event_id: )[^\n]*",
+            re.MULTILINE,
         )
+        task_match = task_pattern.search(new_text)
+        if task_match:
+            new_text = (
+                new_text[: task_match.start(1)] + task_match.group(1) + status +
+                new_text[task_match.start(2) : task_match.start(3)] + task_match.group(3) + correction_event_id +
+                new_text[task_match.end(3) :]
+            )
 
     write_project_atomically(project_path, new_text)
     init_db(db_path)
@@ -179,7 +189,13 @@ def _append_event_to_timeline(
 
 
 def _update_task_in_work_map(text: str, task_id: str, status: str, next_action: str, event_id: str) -> str:
-    """Update status, next_action, and last_event_id for a task in Work Map (v1 only)."""
+    """Update status, next_action, and last_event_id for a task in Work Map (v1/v2)."""
+    if schema_version(text) >= 2:
+        try:
+            return _wms_update_task_state(text, task_id, status, next_action, event_id)
+        except ValueError:
+            return text
+    # v1 path
     task_pattern = re.compile(
         rf"(#### Task: .+? <!-- task:{re.escape(task_id)} -->\n"
         rf"- status: )[^\n]*(\n- next_action: )[^\n]*(\n- last_event_id: )[^\n]*",
