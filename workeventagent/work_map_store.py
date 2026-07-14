@@ -387,6 +387,91 @@ def delete_item(text: str, item_id: str) -> str:
     return before + "\n" + after.lstrip("\n")
 
 
+def update_item(text: str, item_id: str, title: str, background: str | None = None) -> str:
+    """Update an item's title and/or background, preserving siblings byte-for-byte.
+
+    When *background* is ``None`` the background line is left unchanged.
+    An empty string ``""`` removes the existing background line.
+    """
+    items = parse_work_map(text)
+    target = None
+    for it in items:
+        if it["item_id"] == item_id:
+            target = it
+            break
+    if target is None:
+        raise ValueError(f"item not found: {item_id}")
+    v = schema_version(text)
+    if v >= 2:
+        item_pat = re.compile(rf"^###\s+工作项[：:]\s*.+?\s*<!--\s*item:{re.escape(item_id)}\s*-->", re.MULTILINE)
+    else:
+        item_pat = re.compile(rf"^###\s+Item:\s*.+?\s*<!--\s*item:{re.escape(item_id)}\s*-->", re.MULTILINE)
+    m = item_pat.search(text)
+    if m is None:
+        raise ValueError(f"item heading not found for {item_id}")
+    heading_start, heading_end = m.start(), m.end()
+
+    # 1. Replace heading title
+    if v >= 2:
+        new_heading = f"### 工作项：{title} <!-- item:{item_id} -->"
+    else:
+        new_heading = f"### Item: {title} <!-- item:{item_id} -->"
+    result = text[:heading_start] + new_heading + text[heading_end:]
+
+    # 2. Update background, if requested
+    if background is not None:
+        result = _set_item_background(result, item_id, background, v)
+    return result
+
+
+def _set_item_background(text: str, item_id: str, background: str, schema_ver: int) -> str:
+    """Insert, update, or remove a background line after the item heading.
+
+    *background* of ``""`` removes any existing background line.
+    """
+    if schema_ver >= 2:
+        item_pat = re.compile(rf"^###\s+工作项[：:].*<!--\s*item:{re.escape(item_id)}\s*-->", re.MULTILINE)
+    else:
+        item_pat = re.compile(rf"^###\s+Item:.*<!--\s*item:{re.escape(item_id)}\s*-->", re.MULTILINE)
+    m = item_pat.search(text)
+    if m is None:
+        raise ValueError(f"item heading not found for {item_id}")
+    heading_end = m.end()
+    lines = text.splitlines(keepends=True)
+    # Find line index of heading
+    heading_line_idx = None
+    for i, line in enumerate(lines):
+        if f"<!-- item:{item_id} -->" in line:
+            heading_line_idx = i
+            break
+    if heading_line_idx is None:
+        raise ValueError(f"item anchor not found: {item_id}")
+
+    # Find existing background line after heading (before next heading)
+    heading_re = re.compile(r"^(#{2,4})\s")
+    bg_idx = None
+    for j in range(heading_line_idx + 1, len(lines)):
+        stripped = lines[j].strip()
+        if heading_re.match(stripped):
+            break
+        if re.match(r"^-\s*background:", stripped):
+            bg_idx = j
+            break
+
+    if background:
+        bg_line = f"- background: {background}\n"
+        if bg_idx is not None:
+            lines[bg_idx] = bg_line
+        else:
+            insert_at = heading_line_idx + 1
+            while insert_at < len(lines) and lines[insert_at].strip() == "":
+                insert_at += 1
+            lines.insert(insert_at, bg_line)
+    elif bg_idx is not None:
+        del lines[bg_idx]
+    return "".join(lines)
+
+
 def delete_task(text: str, task_id: str) -> str:
     """Delete a task block, preserving siblings and item."""
     v, start, end = _find_task_heading(text, task_id)

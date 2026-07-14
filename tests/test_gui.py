@@ -2468,6 +2468,99 @@ class V2MutationTest(unittest.TestCase):
         text = self.project.read_text(encoding="utf-8")
         self.assertIn("Wire v2 inbox.", text)
 
+    # ── update_item v2 ───────────────────────────────────
+
+    def test_update_item_v2_rename_title(self):
+        """Title rename on v2 should actually change the heading (not silent no-op)."""
+        result = handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "capture",
+            "title": "Event Capture",
+        })
+        self.assertTrue(result["ok"], result)
+
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("### 工作项：Event Capture <!-- item:capture -->", text)
+        self.assertNotIn("### 工作项：Capture <!-- item:capture -->", text)
+
+    def test_update_item_v2_rename_preserves_sibling(self):
+        """Renaming one v2 item must not affect the other item or its tasks."""
+        handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "capture",
+            "title": "Event Capture",
+        })
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("### 工作项：Reporting <!-- item:reporting -->", text)
+        self.assertIn("<!-- task:weekly-summary -->", text)
+
+    def test_update_item_v2_set_background(self):
+        """Setting background on v2 item injects a - background: line."""
+        result = handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "reporting",
+            "title": "Reporting",
+            "background": "Generate daily and weekly reports.",
+        })
+        self.assertTrue(result["ok"], result)
+
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("- background: Generate daily and weekly reports.", text)
+        self.assertIn("### 工作项：Reporting <!-- item:reporting -->", text)
+
+    def test_update_item_v2_clear_background(self):
+        """Clearing background on v2 item removes the - background: line."""
+        # First set it
+        handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "reporting",
+            "title": "Reporting",
+            "background": "Generate reports.",
+        })
+        text_after_set = self.project.read_text(encoding="utf-8")
+        self.assertIn("- background: Generate reports.", text_after_set)
+
+        # Then clear it
+        result = handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "reporting",
+            "title": "Reporting",
+            "background": "",
+        })
+        self.assertTrue(result["ok"], result)
+
+        text = self.project.read_text(encoding="utf-8")
+        self.assertNotIn("- background:", text)
+        self.assertIn("### 工作项：Reporting <!-- item:reporting -->", text)
+
+    def test_update_item_v2_title_only_does_not_affect_background(self):
+        """Title-only rename on v2 must preserve existing background."""
+        # First set background
+        handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "reporting",
+            "title": "Reporting",
+            "background": "Generate reports.",
+        })
+        # Then rename only (background=None → leave unchanged)
+        result = handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "reporting",
+            "title": "Report Gen v2",
+        })
+        self.assertTrue(result["ok"], result)
+
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("### 工作项：Report Gen v2 <!-- item:reporting -->", text)
+        self.assertIn("- background: Generate reports.", text)
+
 
 if __name__ == "__main__":
     unittest.main()

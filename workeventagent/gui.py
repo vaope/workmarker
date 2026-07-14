@@ -40,6 +40,7 @@ from workeventagent.work_map_store import (
     parse_work_map,
     delete_task as wm_delete_task,
     delete_item as wm_delete_item,
+    update_item as wm_update_item,
     update_task_state as wm_update_task_state,
     update_task_field as wm_update_task_field,
 )
@@ -1214,6 +1215,12 @@ def _update_item_block(
     item_anchor = f"<!-- item:{item_id} -->"
     if item_anchor not in text:
         raise ValueError(f"Item anchor not found: {item_anchor}")
+
+    if schema_version(text) >= 2:
+        updated = wm_update_item(text, item_id, new_title, background)
+        return _bump_updated_text(
+            updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        )
 
     # 1. Rename title
     pattern = rf"(### Item:\s+).+?(\s*<!--\s*item:{re.escape(item_id)}\s*-->)"
