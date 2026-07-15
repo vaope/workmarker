@@ -10,6 +10,7 @@ const os = require('os');
 
 const { callBackend } = require('./python_bridge');
 const { loadConfig, saveConfig, dbPathFor } = require('./config');
+const { createHotkeyManager } = require('./hotkey_manager');
 
 let mainWindow = null;
 let captureWindow = null;
@@ -77,6 +78,21 @@ function showCaptureWindow() {
 
 // --- tray + hotkey ---------------------------------------------------------
 
+function toggleMainWindow() {
+  if (!mainWindow) {
+    createMainWindow();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  if (mainWindow.isVisible() && mainWindow.isFocused()) {
+    mainWindow.hide();
+    return;
+  }
+  mainWindow.show();
+  mainWindow.focus();
+}
+
 function setupTray() {
   const iconPath = path.join(__dirname, 'assets', 'tray.png');
   let icon = nativeImage.createFromPath(iconPath);
@@ -98,14 +114,10 @@ function setupTray() {
   tray.on('click', () => showCaptureWindow());
 }
 
-function registerHotkey() {
-  const { hotkey } = loadConfig();
-  globalShortcut.unregisterAll();
-  const accelerator = hotkey || 'CommandOrControl+Shift+Space';
-  const ok = globalShortcut.register(accelerator, () => showCaptureWindow());
-  if (!ok) console.error(`[wea] failed to register global hotkey: ${accelerator}`);
-  return { ok, hotkey: accelerator };
-}
+const hotkeyManager = createHotkeyManager(globalShortcut, {
+  capture: showCaptureWindow,
+  main: toggleMainWindow,
+});
 
 // --- IPC -------------------------------------------------------------------
 
@@ -120,19 +132,31 @@ function attachIpc() {
 
   ipcMain.handle('wea:updateConfig', (_e, patch) => {
     const before = loadConfig();
-    const merged = saveConfig(patch || {});
+    const hasHotkey = patch && (Object.prototype.hasOwnProperty.call(patch, 'hotkey') || Object.prototype.hasOwnProperty.call(patch, 'mainHotkey'));
+    const candidate = { ...before, ...(patch || {}) };
     if (patch && Object.prototype.hasOwnProperty.call(patch, 'workspace') && patch.workspace) {
       try { fs.mkdirSync(path.join(patch.workspace, 'attachments'), { recursive: true }); } catch { /* ignore */ }
     }
-    const hotkeyStatus = patch && Object.prototype.hasOwnProperty.call(patch, 'hotkey')
-      ? registerHotkey()
-      : null;
-    if (hotkeyStatus && !hotkeyStatus.ok) {
-      const reverted = saveConfig({ hotkey: before.hotkey });
-      registerHotkey();
-      return { ...reverted, hotkeyRegistered: false };
+    if (!hasHotkey) {
+      const merged = saveConfig(patch || {});
+      return { ...merged, hotkeyRegistered: true, mainHotkeyRegistered: true };
     }
-    return { ...merged, hotkeyRegistered: hotkeyStatus ? hotkeyStatus.ok : true };
+    const registration = hotkeyManager.registerPair({
+      capture: candidate.hotkey,
+      main: candidate.mainHotkey,
+    });
+    if (registration.ok) {
+      const merged = saveConfig(patch || {});
+      return { ...merged, hotkeyRegistered: true, mainHotkeyRegistered: true };
+    }
+    const reverted = saveConfig({ ...patch, hotkey: registration.active.capture, mainHotkey: registration.active.main });
+    return {
+      ...reverted,
+      hotkeyRegistered: false,
+      mainHotkeyRegistered: false,
+      hotkeyErrorKind: registration.kind,
+      failedHotkey: registration.failed,
+    };
   });
 
   ipcMain.handle('wea:pickWorkspaceDir', async () => {
@@ -378,6 +402,56 @@ function attachIpc() {
     return { ok: true, reportSchedule: c.reportSchedule || {} };
   });
 
+  // ---- project panorama --------------------------------------------------
+
+  ipcMain.handle('wea:projectPanorama', async (_e, { projectPath }) =>
+    callBackend('project_panorama', { project_path: projectPath }, cfg().pythonCmd));
+
+  ipcMain.handle('wea:previewProjectMigration', async (_e, request) =>
+    callBackend('project_migration_preview', {
+      project_path: request.projectPath,
+      status: request.status,
+      phase: request.phase,
+    }, cfg().pythonCmd));
+
+  ipcMain.handle('wea:applyProjectMigration', async (_e, request) => {
+    const c = cfg();
+    return callBackend('project_migration_apply', {
+      project_path: request.projectPath,
+      db_path: dbPathFor(c.workspace),
+      source_hash: request.sourceHash,
+      status: request.status,
+      phase: request.phase,
+    }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:updateProjectProfile', async (_e, request) => {
+    const c = cfg();
+    return callBackend('update_project_profile', {
+      project_path: request.projectPath,
+      db_path: dbPathFor(c.workspace),
+      base_section_hash: request.baseSectionHash,
+      base_metadata_hash: request.baseMetadataHash,
+      status: request.status,
+      phase: request.phase,
+      background: request.background || '',
+      goal: request.goal || '',
+      scope: request.scope || '',
+      success_criteria: request.successCriteria || '',
+    }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:updateProjectSection', async (_e, request) => {
+    const c = cfg();
+    return callBackend('update_project_section', {
+      project_path: request.projectPath,
+      db_path: dbPathFor(c.workspace),
+      section_id: request.sectionId,
+      base_section_hash: request.baseSectionHash,
+      content: request.content,
+    }, c.pythonCmd);
+  });
+
   ipcMain.on('wea:hideCapture', () => { if (captureWindow) captureWindow.hide(); });
   ipcMain.on('wea:resizeCapture', (_e, height) => {
     if (!captureWindow) return;
@@ -479,8 +553,7 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
-    else createMainWindow();
+    toggleMainWindow();
   });
 
   app.whenReady().then(() => {
@@ -489,7 +562,8 @@ if (!gotLock) {
     createMainWindow();
     createCaptureWindow();
     setupTray();
-    registerHotkey();
+    const config = cfg();
+    hotkeyManager.registerStartupPair({ capture: config.hotkey, main: config.mainHotkey });
     startReportScheduler();
 
     app.on('activate', () => {
@@ -500,5 +574,5 @@ if (!gotLock) {
   // Keep running in the tray after the main window is closed.
   app.on('window-all-closed', () => { /* tray-resident; do not quit */ });
   app.on('before-quit', () => { isQuitting = true; });
-  app.on('will-quit', () => { globalShortcut.unregisterAll(); });
+  app.on('will-quit', () => { hotkeyManager.dispose(); });
 }

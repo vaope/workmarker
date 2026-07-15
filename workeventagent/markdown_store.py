@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from workeventagent.models import ArchiveProposal
+from workeventagent.project_schema import schema_version
+from workeventagent.work_map_store import update_task_state, render_v2_task
 
 
 class ProjectDocument:
@@ -69,7 +71,9 @@ class ProjectDocument:
         insert_idx = item_line_idx + 1
         for j in range(item_line_idx + 1, len(body_lines)):
             stripped = body_lines[j].strip()
-            if stripped.startswith("#### Task:") or stripped.startswith("### Item:") or stripped.startswith("## "):
+            if (stripped.startswith("#### Task:") or stripped.startswith("#### [") or
+                    stripped.startswith("### Item:") or stripped.startswith("### 工作项") or
+                    stripped.startswith("## ")):
                 insert_idx = j
                 break
         else:
@@ -91,6 +95,17 @@ class ProjectDocument:
 
     def _replace_task_block(self, task_id: str, proposal: ArchiveProposal) -> str | None:
         full_text = "".join(["---\n", self.frontmatter, "\n---", "".join(self._body_lines)])
+
+        if schema_version(full_text) >= 2:
+            try:
+                return update_task_state(
+                    full_text, task_id,
+                    proposal.event.status,
+                    proposal.event.next_action,
+                    proposal.event.event_id,
+                )
+            except ValueError:
+                return None
 
         match = re.search(
             rf"(#### Task:.*?<!-- task:{re.escape(task_id)} -->.*?\n)"
@@ -121,10 +136,12 @@ class ProjectDocument:
             f"{self._render_timeline_field('status', event.status)}"
             f"{self._render_timeline_field('next_action', event.next_action)}"
         )
-        # Insert before the first ##  after ## Timeline
-        timeline_match = re.search(r"(## Timeline\s*\n)", body)
+        # Find Timeline section in body (v1 or v2)
+        timeline_match = re.search(r"## Timeline\n", body)
         if not timeline_match:
-            raise ValueError("## Timeline section not found")
+            timeline_match = re.search(r"## 事件证据.*\n", body)
+        if not timeline_match:
+            raise ValueError("Timeline section not found")
         insert_pos = timeline_match.end()
         return body[:insert_pos] + timeline_entry + body[insert_pos:]
 
@@ -139,6 +156,15 @@ class ProjectDocument:
     def _render_new_task_block(self, proposal: ArchiveProposal) -> str:
         event = proposal.event
         target = proposal.target
+        full_text = "".join(["---\n", self.frontmatter, "\n---", "".join(self._body_lines)])
+        if schema_version(full_text) >= 2:
+            return render_v2_task({
+                "task_id": target.task_id,
+                "title": target.task_title,
+                "status": event.status,
+                "next_action": event.next_action,
+                "last_event_id": event.event_id,
+            })
         return (
             f"#### Task: {target.task_title} <!-- task:{target.task_id} -->\n"
             f"- status: {event.status}\n"
@@ -148,17 +174,24 @@ class ProjectDocument:
 
     def _insert_new_item_with_task(self, proposal: ArchiveProposal) -> str:
         target = proposal.target
-        work_map_match = re.search(r"(## Work Map\s*\n)", self.body)
+        work_map_match = re.search(r"^##.*(?:Work Map|工作地图).*\n", self.body, re.MULTILINE)
         if not work_map_match:
-            raise ValueError("## Work Map section not found")
+            raise ValueError("Work Map section not found")
 
-        section_match = re.search(r"^## (?!Work Map\b).*$", self.body[work_map_match.end():], re.MULTILINE)
+        section_match = re.search(r"^## (?!.*(?:Work Map|工作地图)).*$", self.body[work_map_match.end():], re.MULTILINE)
         insert_pos = work_map_match.end() + section_match.start() if section_match else len(self.body)
         item_title = target.item_title or target.item_id
-        block = (
-            f"### Item: {item_title} <!-- item:{target.item_id} -->\n"
-            f"{self._render_new_task_block(proposal)}\n\n"
-        )
+        full_text = "".join(["---\n", self.frontmatter, "\n---", self.body])
+        if schema_version(full_text) >= 2:
+            block = (
+                f"### 工作项：{item_title} <!-- item:{target.item_id} -->\n\n"
+                f"{self._render_new_task_block(proposal)}\n\n"
+            )
+        else:
+            block = (
+                f"### Item: {item_title} <!-- item:{target.item_id} -->\n"
+                f"{self._render_new_task_block(proposal)}\n\n"
+            )
         prefix = self.body[:insert_pos].rstrip() + "\n\n"
         suffix = self.body[insert_pos:].lstrip("\n")
         return "".join(["---\n", self.frontmatter, "\n---", prefix, block, suffix])

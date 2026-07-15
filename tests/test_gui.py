@@ -8,7 +8,6 @@ from unittest.mock import patch
 
 from workeventagent.gui import (
     _event_id_timestamp,
-    _parse_timeline_events,
     _parse_work_map_tasks,
     _parse_attachments_task_ids,
     _generate_init_markdown,
@@ -35,6 +34,8 @@ from workeventagent.gui import (
     handle_inbox_cancel,
     handle_search,
 )
+from workeventagent.project_schema import parse_timeline_events
+
 from workeventagent.search_store import search_workspace
 from workeventagent.markdown_store import write_project_atomically
 from workeventagent.index_store import get_task, init_db, rebuild_index
@@ -147,7 +148,7 @@ def _deep_update(d, u):
 class TimelineParserTest(unittest.TestCase):
     def test_parses_timeline_events_from_synthetic(self):
         """Fixture uses real append layout: newest (ev2) on top, oldest (ev1) below."""
-        events = _parse_timeline_events(_SYNTHETIC_WITH_TIMELINE)
+        events = parse_timeline_events(_SYNTHETIC_WITH_TIMELINE)
         self.assertEqual(len(events), 2)
         self.assertEqual(events[0]["event_id"], "ev2")
         self.assertEqual(events[0]["summary"], "Making progress.")
@@ -156,13 +157,13 @@ class TimelineParserTest(unittest.TestCase):
 
     def test_empty_timeline_returns_empty(self):
         text = "---\nproject_id: test\n---\n## Timeline\n\n## Other\n"
-        events = _parse_timeline_events(text)
+        events = parse_timeline_events(text)
         self.assertEqual(events, [])
 
     def test_fixture_timeline_is_empty(self):
         """The actual fixture has an empty Timeline section — parser handles this."""
         text = FIXTURE.read_text(encoding="utf-8")
-        events = _parse_timeline_events(text)
+        events = parse_timeline_events(text)
         self.assertEqual(events, [])
 
 
@@ -622,6 +623,7 @@ class ProjectsTest(unittest.TestCase):
             (workspace / "proj-a.md").write_text(
                 "---\nproject_id: proj-a\ntitle: Project A\ndoc_kind: work_project\nupdated: 2026-07-01\n---\n"
                 "## Work Map\n"
+                "### Item: Tasks <!-- item:tasks -->\n"
                 "#### Task: t1 <!-- task:t1 -->\n- status: in_progress\n- next_action: go\n- last_event_id: \n",
                 encoding="utf-8",
             )
@@ -1748,7 +1750,7 @@ class ReportTest(unittest.TestCase):
         try:
             tasks = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
             task_id = tasks[0]["task_id"]
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            today = datetime.now().astimezone().strftime("%Y-%m-%d")
             self._commit_event(proj, db, task_id, "Fixed a bug", f"{today.replace('-', '')}-event1")
 
             result = handle_generate_report({
@@ -2153,6 +2155,411 @@ class SearchHandlerTests(unittest.TestCase):
             result = handle_search({"workspace": str(ws), "query": "Search Test Project"})
             self.assertTrue(result["ok"])
             self.assertTrue(any("Search Test Project" in r.get("title", "") for r in result["results"]))
+
+
+class V2ProjectReadTest(unittest.TestCase):
+    """All existing read paths must understand schema v2."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ws = Path(self.tmp.name)
+        self.db = self.ws / "index.sqlite"
+        init_db(self.db)
+        self.project = self.ws / "report-project.md"
+        self.project.write_text(
+            Path("tests/fixtures/project-v2.md").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_v2_project_is_readable_by_projects(self):
+        result = handle_projects({"workspace": str(self.ws)})
+        self.assertTrue(result["ok"])
+        projects = result["projects"]
+        self.assertTrue(any(p["project_id"] == "report-project" for p in projects))
+        v2_project = next(p for p in projects if p["project_id"] == "report-project")
+        self.assertEqual(v2_project["open_task_count"], 2)
+
+    def test_v2_tasks_uses_typed_work_map_state(self):
+        result = handle_tasks({"project_path": str(self.project)})
+        items = result["items"]
+        self.assertEqual(len(items), 2)
+        capture = next(it for it in items if it["item_id"] == "capture")
+        self.assertIn("background", capture)
+        persist = next(t for t in capture["tasks"] if t["task_id"] == "persist-card")
+        self.assertEqual(persist["status"], "done")
+        self.assertEqual(persist["next_action"], "Add retry.")
+        route = next(t for t in capture["tasks"] if t["task_id"] == "route-archive")
+        self.assertEqual(route["status"], "in_progress")
+
+    def test_v2_timeline_returns_events(self):
+        result = handle_timeline({"project_path": str(self.project)})
+        self.assertTrue(result["ok"])
+        events = result["events"]
+        self.assertEqual(len(events), 2)
+        self.assertIn("event-a", [e["event_id"] for e in events])
+
+    def test_v2_sqlite_rebuild_and_readback(self):
+        rebuild_index(self.db, [self.project])
+        task = get_task(self.db, "persist-card")
+        self.assertIsNotNone(task)
+        self.assertEqual(task["next_action"], "Add retry.")
+
+    def test_v2_search_finds_v2_content(self):
+        rebuild_index(self.db, [self.project])
+        results = search_workspace(self.ws, "Persist card")
+        self.assertTrue(any(r.get("kind") == "task" for r in results))
+
+
+class V2PanoramaTests(unittest.TestCase):
+    """Project panorama read and reviewed-section edits for schema v2."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ws = Path(self.tmp.name)
+        self.db = self.ws / "index.sqlite"
+        init_db(self.db)
+        self.project = self.ws / "report-project.md"
+        self.project.write_text(
+            Path("tests/fixtures/project-v2.md").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_project_panorama_returns_owned_sections_and_hashes(self):
+        from workeventagent.gui import handle_project_panorama
+        result = handle_project_panorama({"project_path": str(self.project)})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["schema_version"], 2)
+        self.assertFalse(result.get("migration_required"))
+        self.assertEqual(result["project"]["status"], "active")
+        self.assertEqual(result["project"]["phase"], "implementation")
+        self.assertIn("metadata_hash", result["project"])
+        self.assertTrue(result["project"]["metadata_hash"].startswith("sha256:"))
+
+        sections = result["sections"]
+        self.assertIn("project-profile", sections)
+        self.assertEqual(sections["project-profile"]["ownership"], "reviewed")
+        self.assertIn("hash", sections["project-profile"])
+        self.assertTrue(sections["project-profile"]["hash"].startswith("sha256:"))
+        self.assertIn("title", sections["project-profile"])
+        self.assertIn("content", sections["project-profile"])
+        self.assertIn("source_event_ids", sections["project-profile"])
+
+        self.assertIn("current-panorama", sections)
+        self.assertEqual(sections["current-panorama"]["ownership"], "derived-reviewed")
+
+        self.assertIn("technical-overview", sections)
+        self.assertEqual(sections["technical-overview"]["ownership"], "reviewed")
+
+        self.assertIn("timeline", sections)
+        self.assertEqual(sections["timeline"]["ownership"], "append-only")
+
+        # Control metadata is stripped from visible content
+        self.assertNotIn("panorama-meta", sections["project-profile"]["content"])
+        self.assertNotIn("section:", sections["timeline"]["content"])
+
+    def test_panorama_content_strips_control_comments(self):
+        from workeventagent.gui import handle_project_panorama
+        result = handle_project_panorama({"project_path": str(self.project)})
+        content = result["sections"]["technical-overview"]["content"]
+        self.assertIn("Python", content)
+        self.assertNotIn("<!--", content)
+
+    def test_reviewed_edit_rejects_stale_hash_without_write(self):
+        from workeventagent.gui import handle_update_project_section
+        before = self.project.read_text(encoding="utf-8")
+        result = handle_update_project_section({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "section_id": "technical-overview",
+            "base_section_hash": "sha256:stale",
+            "content": "Python 负责写入。",
+        })
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kind"], "stale_section")
+        self.assertEqual(self.project.read_text(encoding="utf-8"), before)
+
+    def test_reviewed_edit_rejects_protected_section(self):
+        from workeventagent.gui import handle_update_project_section
+        result = handle_update_project_section({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "section_id": "timeline",
+            "base_section_hash": "sha256:any",
+            "content": "not allowed",
+        })
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kind"], "invalid_operation")
+
+    def test_profile_edit_updates_explicit_metadata_and_fixed_subsections(self):
+        from workeventagent.gui import handle_project_panorama, handle_update_project_profile
+        current = handle_project_panorama({"project_path": str(self.project)})
+        self.assertTrue(current["ok"])
+
+        result = handle_update_project_profile({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "base_section_hash": current["sections"]["project-profile"]["hash"],
+            "base_metadata_hash": current["project"]["metadata_hash"],
+            "status": "active",
+            "phase": "implementation",
+            "background": "信息散落。",
+            "goal": "形成可信项目全景。",
+            "scope": "本地优先。",
+            "success_criteria": "单文档可读。",
+        })
+        self.assertTrue(result["ok"], str(result))
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("phase: implementation", text)
+        self.assertIn("### 成功标准\n单文档可读。", text)
+        self.assertIn("### 背景\n信息散落。", text)
+
+    def test_profile_edit_rejects_stale_metadata_hash(self):
+        from workeventagent.gui import handle_project_panorama, handle_update_project_profile
+        current = handle_project_panorama({"project_path": str(self.project)})
+        before = self.project.read_text(encoding="utf-8")
+        result = handle_update_project_profile({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "base_section_hash": current["sections"]["project-profile"]["hash"],
+            "base_metadata_hash": "sha256:stale",
+            "status": "active",
+            "phase": "planning",
+            "background": "",
+            "goal": "",
+            "scope": "",
+            "success_criteria": "",
+        })
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kind"], "stale_metadata")
+        self.assertEqual(self.project.read_text(encoding="utf-8"), before)
+
+
+class V2MutationTest(unittest.TestCase):
+    """Delete/update handlers must work correctly on schema v2 documents."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ws = Path(self.tmp.name)
+        self.db = self.ws / "index.sqlite"
+        init_db(self.db)
+        self.project = self.ws / "report-project.md"
+        self.project.write_text(
+            Path("tests/fixtures/project-v2.md").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    # ── delete_item v2 ───────────────────────────────────
+
+    def test_delete_item_v2_removes_item_and_its_tasks(self):
+        before = handle_tasks({"project_path": str(self.project)})
+        self.assertEqual(len(before["items"]), 2)
+        capture = next(it for it in before["items"] if it["item_id"] == "capture")
+        self.assertGreater(len(capture["tasks"]), 0)
+
+        result = handle_delete_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "capture",
+        })
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["item_id"], "capture")
+        self.assertGreater(result["deleted_task_count"], 0)
+
+        after = handle_tasks({"project_path": str(self.project)})
+        self.assertEqual(len(after["items"]), 1)
+        self.assertEqual(after["items"][0]["item_id"], "reporting")
+
+    def test_delete_item_v2_preserves_sibling_item_and_tasks(self):
+        before = handle_tasks({"project_path": str(self.project)})
+        reporting = next(it for it in before["items"] if it["item_id"] == "reporting")
+        reporting_task_count = len(reporting["tasks"])
+
+        handle_delete_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "capture",
+        })
+        after = handle_tasks({"project_path": str(self.project)})
+        self.assertEqual(len(after["items"]), 1)
+        survivor = after["items"][0]
+        self.assertEqual(survivor["item_id"], "reporting")
+        self.assertEqual(len(survivor["tasks"]), reporting_task_count)
+
+    # ── delete_task v2 ───────────────────────────────────
+
+    def test_delete_task_v2_removes_only_target(self):
+        before = handle_tasks({"project_path": str(self.project)})
+        capture = next(it for it in before["items"] if it["item_id"] == "capture")
+        self.assertEqual(len(capture["tasks"]), 2)
+
+        result = handle_delete_task({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "task_id": "persist-card",
+        })
+        self.assertTrue(result["ok"], result)
+
+        after = handle_tasks({"project_path": str(self.project)})
+        capture_after = next(it for it in after["items"] if it["item_id"] == "capture")
+        self.assertEqual(len(capture_after["tasks"]), 1)
+        self.assertEqual(capture_after["tasks"][0]["task_id"], "route-archive")
+
+    def test_delete_task_v2_preserves_other_item(self):
+        handle_delete_task({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "task_id": "persist-card",
+        })
+        after = handle_tasks({"project_path": str(self.project)})
+        reporting = next(it for it in after["items"] if it["item_id"] == "reporting")
+        self.assertEqual(len(reporting["tasks"]), 1)
+        self.assertEqual(reporting["tasks"][0]["task_id"], "weekly-summary")
+
+    # ── update_task v2 ───────────────────────────────────
+
+    def test_update_task_v2_status(self):
+        result = handle_update_task({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "task_id": "route-archive",
+            "field": "status",
+            "value": "done",
+        })
+        self.assertTrue(result["ok"], result)
+
+        after = handle_tasks({"project_path": str(self.project)})
+        capture = next(it for it in after["items"] if it["item_id"] == "capture")
+        route = next(t for t in capture["tasks"] if t["task_id"] == "route-archive")
+        self.assertEqual(route["status"], "done")
+
+    def test_update_task_v2_title(self):
+        result = handle_update_task({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "task_id": "persist-card",
+            "field": "title",
+            "value": "Persist v2 card",
+        })
+        self.assertTrue(result["ok"], result)
+
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("Persist v2 card", text)
+        self.assertIn("<!-- task:persist-card -->", text)
+
+    def test_update_task_v2_next_action(self):
+        result = handle_update_task({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "task_id": "route-archive",
+            "field": "next_action",
+            "value": "Wire v2 inbox.",
+        })
+        self.assertTrue(result["ok"], result)
+
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("Wire v2 inbox.", text)
+
+    # ── update_item v2 ───────────────────────────────────
+
+    def test_update_item_v2_rename_title(self):
+        """Title rename on v2 should actually change the heading (not silent no-op)."""
+        result = handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "capture",
+            "title": "Event Capture",
+        })
+        self.assertTrue(result["ok"], result)
+
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("### 工作项：Event Capture <!-- item:capture -->", text)
+        self.assertNotIn("### 工作项：Capture <!-- item:capture -->", text)
+
+    def test_update_item_v2_rename_preserves_sibling(self):
+        """Renaming one v2 item must not affect the other item or its tasks."""
+        handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "capture",
+            "title": "Event Capture",
+        })
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("### 工作项：Reporting <!-- item:reporting -->", text)
+        self.assertIn("<!-- task:weekly-summary -->", text)
+
+    def test_update_item_v2_set_background(self):
+        """Setting background on v2 item injects a - background: line."""
+        result = handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "reporting",
+            "title": "Reporting",
+            "background": "Generate daily and weekly reports.",
+        })
+        self.assertTrue(result["ok"], result)
+
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("- background: Generate daily and weekly reports.", text)
+        self.assertIn("### 工作项：Reporting <!-- item:reporting -->", text)
+
+    def test_update_item_v2_clear_background(self):
+        """Clearing background on v2 item removes the - background: line."""
+        # First set it
+        handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "reporting",
+            "title": "Reporting",
+            "background": "Generate reports.",
+        })
+        text_after_set = self.project.read_text(encoding="utf-8")
+        self.assertIn("- background: Generate reports.", text_after_set)
+
+        # Then clear it
+        result = handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "reporting",
+            "title": "Reporting",
+            "background": "",
+        })
+        self.assertTrue(result["ok"], result)
+
+        text = self.project.read_text(encoding="utf-8")
+        self.assertNotIn("- background:", text)
+        self.assertIn("### 工作项：Reporting <!-- item:reporting -->", text)
+
+    def test_update_item_v2_title_only_does_not_affect_background(self):
+        """Title-only rename on v2 must preserve existing background."""
+        # First set background
+        handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "reporting",
+            "title": "Reporting",
+            "background": "Generate reports.",
+        })
+        # Then rename only (background=None → leave unchanged)
+        result = handle_update_item({
+            "project_path": str(self.project),
+            "db_path": str(self.db),
+            "item_id": "reporting",
+            "title": "Report Gen v2",
+        })
+        self.assertTrue(result["ok"], result)
+
+        text = self.project.read_text(encoding="utf-8")
+        self.assertIn("### 工作项：Report Gen v2 <!-- item:reporting -->", text)
+        self.assertIn("- background: Generate reports.", text)
 
 
 if __name__ == "__main__":

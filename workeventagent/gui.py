@@ -21,6 +21,29 @@ from pathlib import Path
 
 from workeventagent.ids import make_event_id, make_stable_id, make_unique_stable_id
 from workeventagent.index_store import init_db, rebuild_index
+from workeventagent.project_schema import (
+    SECTION_BY_ID,
+    SECTION_SPECS,
+    find_section,
+    metadata_hash,
+    parse_attachment_records,
+    parse_frontmatter,
+    parse_timeline_events,
+    replace_section_content,
+    schema_version,
+    section_content,
+    section_hash,
+    update_frontmatter,
+    validate_reviewed_content,
+)
+from workeventagent.work_map_store import (
+    parse_work_map,
+    delete_task as wm_delete_task,
+    delete_item as wm_delete_item,
+    update_item as wm_update_item,
+    update_task_state as wm_update_task_state,
+    update_task_field as wm_update_task_field,
+)
 from workeventagent.inbox_store import (
     archive_capture,
     cancel_capture,
@@ -98,6 +121,11 @@ def _main_impl() -> None:
         "correct_event": handle_correct_event,
         "correction_recoveries": handle_correction_recoveries,
         "resume_correction": handle_resume_correction,
+        "project_migration_preview": handle_project_migration_preview,
+        "project_migration_apply": handle_project_migration_apply,
+        "project_panorama": handle_project_panorama,
+        "update_project_section": handle_update_project_section,
+        "update_project_profile": handle_update_project_profile,
     }
     handler = handlers.get(command)
     if handler is None:
@@ -328,10 +356,8 @@ def handle_tasks(request: dict) -> dict:
     fm = _parse_frontmatter(text)
     project_id = fm.get("project_id", "")
     title = fm.get("title", "")
-
-    work_map_items = _parse_work_map_items(text)
-    work_map_tasks = _parse_work_map_tasks(text)
-    timeline_events = _parse_timeline_events(text)
+    items = parse_work_map(text)
+    timeline_events = parse_timeline_events(text)
 
     # Build task_id → latest timestamp map
     task_updated: dict[str, str] = {}
@@ -341,36 +367,10 @@ def handle_tasks(request: dict) -> dict:
         if tid and ts and tid not in task_updated:
             task_updated[tid] = ts
 
-    # Group tasks by item
-    items_map: dict[str, dict] = {
-        item["item_id"]: {
-            "item_id": item["item_id"],
-            "title": item["title"],
-            "background": item.get("background", ""),
-            "tasks": [],
-        }
-        for item in work_map_items
-    }
-    for wt in work_map_tasks:
-        item_id = wt["item_id"]
-        if item_id not in items_map:
-            items_map[item_id] = {"item_id": item_id, "title": wt.get("item_title", ""), "tasks": []}
-        items_map[item_id]["tasks"].append({
-            "task_id": wt["task_id"],
-            "title": wt["title"],
-            "status": wt["status"],
-            "next_action": wt["next_action"],
-            "last_event_id": wt["last_event_id"],
-            "updated_at": task_updated.get(wt["task_id"], ""),
-        })
-
-    # Preserve original item order from Work Map
-    item_order: list[str] = [item["item_id"] for item in work_map_items]
-    for wt in work_map_tasks:
-        if wt["item_id"] not in item_order:
-            item_order.append(wt["item_id"])
-
-    items = [items_map[iid] for iid in item_order if iid in items_map]
+    # Add updated_at to each task from timeline events
+    for item in items:
+        for task in item.get("tasks", []):
+            task["updated_at"] = task_updated.get(task["task_id"], "")
 
     return {"ok": True, "project_id": project_id, "title": title, "items": items}
 
@@ -381,7 +381,7 @@ def handle_timeline(request: dict) -> dict:
     project_path = Path(request["project_path"])
     text = project_path.read_text(encoding="utf-8")
 
-    events = _parse_timeline_events(text)
+    events = parse_timeline_events(text)
     work_map_tasks = _parse_work_map_tasks(text)
     attachment_task_ids = _parse_attachments_task_ids(text)
 
@@ -978,8 +978,13 @@ def handle_init(request: dict) -> dict:
 
     now = datetime.now(timezone.utc)
     date_str = now.strftime("%Y-%m-%d")
-
-    markdown = _generate_init_markdown(project_id, title, date_str, items_spec)
+    use_v2 = request.get("schema_version") == 2 or request.get("status") or request.get("phase")
+    if use_v2:
+        status = request.get("status", "active")
+        phase = request.get("phase", "planning")
+        markdown = render_new_project_v2(project_id, title, date_str, items_spec, status, phase)
+    else:
+        markdown = _generate_init_markdown(project_id, title, date_str, items_spec)
     workspace.mkdir(parents=True, exist_ok=True)
     project_path.write_text(markdown, encoding="utf-8")
 
@@ -1069,6 +1074,16 @@ def _delete_item_block(text: str, item_id: str) -> tuple[str, int]:
 
     Returns (updated_text, deleted_task_count).
     """
+    if schema_version(text) >= 2:
+        items = parse_work_map(text)
+        target = next((it for it in items if it["item_id"] == item_id), None)
+        if target is None:
+            raise ValueError(f"Item anchor not found: <!-- item:{item_id} -->")
+        task_count = len(target["tasks"])
+        updated = wm_delete_item(text, item_id)
+        updated = _bump_updated_text(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        return updated, task_count
+
     item_anchor = f"<!-- item:{item_id} -->"
     lines = text.splitlines(keepends=True)
 
@@ -1128,6 +1143,10 @@ def _delete_task_block(text: str, task_id: str) -> str:
     same as _delete_item_block — not a fixed line-count offset.
     Timeline events referencing this task_id are preserved.
     """
+    if schema_version(text) >= 2:
+        updated = wm_delete_task(text, task_id)
+        return _bump_updated_text(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+
     task_anchor = f"<!-- task:{task_id} -->"
     lines = text.splitlines(keepends=True)
 
@@ -1196,6 +1215,12 @@ def _update_item_block(
     item_anchor = f"<!-- item:{item_id} -->"
     if item_anchor not in text:
         raise ValueError(f"Item anchor not found: {item_anchor}")
+
+    if schema_version(text) >= 2:
+        updated = wm_update_item(text, item_id, new_title, background)
+        return _bump_updated_text(
+            updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        )
 
     # 1. Rename title
     pattern = rf"(### Item:\s+).+?(\s*<!--\s*item:{re.escape(item_id)}\s*-->)"
@@ -1293,6 +1318,17 @@ def handle_update_task(request: dict) -> dict:
 
 def _update_task_attr(text: str, task_id: str, field: str, value: str) -> str:
     """Update one attribute of a task block. Preserves anchor id."""
+    if schema_version(text) >= 2:
+        if field == "status":
+            updated = wm_update_task_state(text, task_id, value)
+        elif field == "title":
+            updated = wm_update_task_field(text, task_id, "title", value)
+        elif field == "next_action":
+            updated = wm_update_task_field(text, task_id, "next_action", value)
+        else:
+            raise ValueError(f"unsupported field for v2: {field}")
+        return _bump_updated_text(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+
     task_anchor = f"<!-- task:{task_id} -->"
     lines = text.splitlines(keepends=True)
 
@@ -1324,9 +1360,72 @@ def _update_task_attr(text: str, task_id: str, field: str, value: str) -> str:
     )
 
 
+def render_new_project_v2(
+    project_id: str, title: str, date_str: str, items_spec: list[dict],
+    status: str = "active", phase: str = "planning",
+) -> str:
+    if not status or not phase:
+        raise ValueError("status and phase are required")
+    lines: list[str] = []
+    lines.append("---")
+    lines.append(f"project_id: {project_id}")
+    lines.append(f"title: {title}")
+    lines.append("doc_kind: work_project")
+    lines.append("schema_version: 2")
+    lines.append(f"status: {status}")
+    lines.append(f"phase: {phase}")
+    lines.append(f"created: {date_str}")
+    lines.append(f"updated: {date_str}")
+    lines.append("---")
+    lines.append("")
+    lines.append(f"# {title}")
+    lines.append("")
+
+    # All nine anchored sections in approved order
+    sections = [
+        ("project-profile", "## 项目档案 <!-- section:project-profile -->\n\n### 背景\n\n### 目标\n\n### 范围\n\n### 成功标准\n"),
+        ("current-panorama", "## 当前全景 <!-- section:current-panorama -->\n"),
+        ("work-map", "## 工作地图 <!-- section:work-map -->\n"),
+        ("technical-overview", "## 技术概览 <!-- section:technical-overview -->\n"),
+        ("project-knowledge", "## 关键认知 <!-- section:project-knowledge -->\n"),
+        ("decisions", "## 关键决策 <!-- section:decisions -->\n"),
+        ("attachments", "## 附件 <!-- section:attachments -->\n"),
+        ("timeline", "## 事件证据 <!-- section:timeline -->\n"),
+        ("rollups", "## 历史摘要 <!-- section:rollups -->\n"),
+    ]
+
+    for section_id, heading in sections:
+        if section_id == "work-map":
+            lines.append(heading)
+            lines.append("")
+            existing_item_ids: set[str] = set()
+            existing_task_ids: set[str] = set()
+            for item_spec in items_spec:
+                item_title = item_spec.get("title", "")
+                item_id = make_unique_stable_id(item_title, existing_item_ids)
+                existing_item_ids.add(item_id)
+                lines.append(f"### 工作项：{item_title} <!-- item:{item_id} -->")
+                lines.append("")
+                for task_title in item_spec.get("tasks", []):
+                    task_id = make_unique_stable_id(task_title, existing_task_ids)
+                    existing_task_ids.add(task_id)
+                    lines.append(f"#### [ ] 任务：{task_title} <!-- task:{task_id} -->")
+                    lines.append("- 下一步：")
+                    lines.append(f"<!-- task-meta:last_event_id= -->")
+                    lines.append("")
+                if not item_spec.get("tasks"):
+                    lines.append("")
+        else:
+            lines.append(heading)
+            lines.append("")
+
+    return "\n".join(lines)
+
+
 def _generate_init_markdown(
     project_id: str, title: str, date_str: str, items_spec: list[dict]
 ) -> str:
+    """Legacy v1 init — preserved for test compatibility."""
     lines: list[str] = []
     lines.append("---")
     lines.append(f"project_id: {project_id}")
@@ -1453,78 +1552,17 @@ def _build_project_route_context(projects: list[dict]) -> str:
             lines.append("")
             continue
 
-        for item in _parse_work_map_items(text):
+        for item in parse_work_map(text):
             lines.append(f"- item: {item['title']} ({item['item_id']})")
-        for task in _parse_work_map_tasks(text)[:20]:
-            next_action = task.get("next_action", "")
-            lines.append(
-                f"  - task: {task['title']} ({task['task_id']}), "
-                f"status={task.get('status', '')}, next_action={next_action}"
-            )
+            for task in item.get("tasks", [])[:20]:
+                next_action = task.get("next_action", "")
+                lines.append(
+                    f"  - task: {task['title']} ({task['task_id']}), "
+                    f"status={task.get('status', '')}, next_action={next_action}"
+                )
         lines.append("")
     return "\n".join(lines)
 
-
-# ── Timeline parser (new capability) ────────────────────
-
-def _parse_timeline_events(text: str) -> list[dict]:
-    """Parse ## Timeline section into list of event dicts.
-
-    Format per WORKLOG_SCHEMA.md:
-        - 2026-06-29T15:30:00.123+08:00 <!-- event:20260629-153000123-kv-cache-blockers -->
-          - task_id: kv-cache-blockers
-          - input: ...
-          - summary: ...
-          - status: in_progress
-          - next_action: ...
-    """
-    events: list[dict] = []
-    in_timeline = False
-    current_event: dict | None = None
-    current_key: str | None = None
-    # Track parentages: event lines start with "- ", sub-items with "  - "
-    _event_line_re = re.compile(r"^- (\S+)\s*<!--\s*event:(.+?)\s*-->")
-    _sub_kv_re = re.compile(r"^  - ([a-z_]+):\s*(.*)")
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped == "## Timeline":
-            in_timeline = True
-            continue
-        if in_timeline and stripped.startswith("## ") and stripped != "## Timeline":
-            if current_event:
-                events.append(current_event)
-                current_event = None
-                current_key = None
-            break
-
-        if in_timeline:
-            ev_match = _event_line_re.match(line)
-            if ev_match:
-                if current_event:
-                    events.append(current_event)
-                current_event = {
-                    "timestamp": ev_match.group(1),
-                    "event_id": ev_match.group(2).strip(),
-                }
-                current_key = None
-                continue
-
-            if current_event is not None:
-                kv_match = _sub_kv_re.match(line)
-                if kv_match:
-                    current_key = kv_match.group(1).strip()
-                    current_event[current_key] = kv_match.group(2).strip()
-                    continue
-                if current_key and line.startswith("    "):
-                    current_event[current_key] = (
-                        current_event.get(current_key, "") + "\n" + line[4:].rstrip()
-                    )
-
-    if current_event:
-        events.append(current_event)
-
-    return events
 
 
 # ── Work Map task parser ─────────────────────────────────
@@ -1768,5 +1806,229 @@ def _dict_to_proposal(data: dict) -> ArchiveProposal:
     )
 
 
-if __name__ == "__main__":
-    main()
+# ── migration ───────────────────────────────────────────────
+
+def handle_project_migration_preview(request: dict) -> dict:
+    from workeventagent.project_migration import preview_v1_to_v2
+    project_path = Path(request["project_path"])
+    text = project_path.read_text(encoding="utf-8")
+    status = request.get("status", "active")
+    phase = request.get("phase", "planning")
+    try:
+        preview = preview_v1_to_v2(text, status, phase)
+    except ValueError as e:
+        return {"ok": False, "kind": "invalid_input", "error": str(e)}
+    return {
+        "ok": True,
+        "migration": {
+            "source_schema": preview.source_schema,
+            "target_schema": preview.target_schema,
+            "source_hash": preview.source_hash,
+            "diff": preview.diff,
+            "summary": preview.summary,
+            "status": status,
+            "phase": phase,
+        },
+    }
+
+
+def handle_project_migration_apply(request: dict) -> dict:
+    from workeventagent.project_migration import apply_v1_to_v2
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    source_hash = request["source_hash"]
+    status = request.get("status", "active")
+    phase = request.get("phase", "planning")
+    return apply_v1_to_v2(project_path, db_path, source_hash, status, phase)
+
+
+# ── project_panorama ────────────────────────────────────────
+
+def handle_project_panorama(request: dict) -> dict:
+    """Return typed project panorama data: metadata + all section content/hashes/ownership."""
+    project_path = Path(request["project_path"])
+    text = project_path.read_text(encoding="utf-8")
+    ver = schema_version(text)
+
+    fm = parse_frontmatter(text)
+    project = {
+        "project_id": fm.get("project_id", ""),
+        "title": fm.get("title", ""),
+        "status": fm.get("status", "active"),
+        "phase": fm.get("phase", "planning"),
+        "updated": fm.get("updated", ""),
+        "metadata_hash": metadata_hash(text),
+    }
+
+    if ver < 2:
+        return {
+            "ok": True,
+            "schema_version": ver,
+            "migration_required": True,
+            "project": project,
+            "sections": {},
+        }
+
+    sections: dict[str, dict] = {}
+    for spec in SECTION_SPECS:
+        try:
+            content = section_content(text, spec.section_id)
+        except ValueError:
+            continue
+        visible = _strip_panorama_control(content)
+        source_event_ids = _parse_panorama_source_events(content)
+        sections[spec.section_id] = {
+            "title": spec.title,
+            "ownership": spec.ownership,
+            "content": visible,
+            "hash": section_hash(text, spec.section_id),
+            "source_event_ids": source_event_ids,
+        }
+
+    return {
+        "ok": True,
+        "schema_version": 2,
+        "migration_required": False,
+        "project": project,
+        "sections": sections,
+    }
+
+
+_PANORAMA_CONTROL_RE = re.compile(r"<!--\s*panorama-meta[^>]*-->", re.IGNORECASE)
+
+
+def _replace_section_raw(text: str, section_id: str, content: str) -> str:
+    """Replace section content without validate_reviewed_content (for profile subsections)."""
+    section = find_section(text, section_id)
+    rendered = "\n" + content.strip("\n") + "\n\n"
+    return text[:section.content_start - 1] + rendered + text[section.content_end:]
+
+
+def _strip_panorama_control(content: str) -> str:
+    """Remove panorama-meta control comments from visible content."""
+    cleaned = _PANORAMA_CONTROL_RE.sub("", content)
+    # Remove leading blank lines that were adjacent to removed comments
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip("\n") + "\n"
+
+
+_SOURCE_EVENTS_RE = re.compile(r"source_events=([a-zA-Z0-9_,-]+)")
+
+
+def _parse_panorama_source_events(content: str) -> list[str]:
+    """Extract source event IDs from panorama-meta comments."""
+    ids: list[str] = []
+    for match in _PANORAMA_CONTROL_RE.finditer(content):
+        raw = match.group(0)
+        ev_match = _SOURCE_EVENTS_RE.search(raw)
+        if ev_match:
+            for eid in ev_match.group(1).split(","):
+                eid = eid.strip()
+                if eid:
+                    ids.append(eid)
+    return ids
+
+
+# ── update_project_section ─────────────────────────────────
+
+_EDITABLE_SECTIONS = {"technical-overview", "project-knowledge"}
+
+
+def handle_update_project_section(request: dict) -> dict:
+    """Hash-guarded edit of a reviewed section (technical-overview, project-knowledge)."""
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    section_id = request["section_id"]
+    base_hash = request["base_section_hash"]
+    content = request["content"]
+
+    if section_id not in _EDITABLE_SECTIONS:
+        return {"ok": False, "kind": "invalid_operation",
+                "error": f"section {section_id} cannot be edited through this handler"}
+
+    text = project_path.read_text(encoding="utf-8")
+    if schema_version(text) < 2:
+        return {"ok": False, "kind": "invalid_operation",
+                "error": "project must be migrated to v2 first"}
+
+    # Validate hash
+    if section_hash(text, section_id) != base_hash:
+        return {"ok": False, "kind": "stale_section",
+                "error": "section has changed — reload and re-edit"}
+
+    # Validate and apply
+    validate_reviewed_content(content)
+    updated = replace_section_content(text, section_id, content)
+
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    updated = _bump_updated_text(updated, date_str)
+
+    write_project_atomically(project_path, updated)
+    init_db(db_path)
+    rebuild_index(db_path, [project_path])
+    return {"ok": True, "section_id": section_id}
+
+
+# ── update_project_profile ─────────────────────────────────
+
+_PROFILE_FIELDS = ("background", "goal", "scope", "success_criteria")
+_PROFILE_SUBSECTION_TITLES = {
+    "background": "背景",
+    "goal": "目标",
+    "scope": "范围",
+    "success_criteria": "成功标准",
+}
+
+
+def handle_update_project_profile(request: dict) -> dict:
+    """Hash-guarded edit of project profile: metadata + 4 subsections."""
+    project_path = Path(request["project_path"])
+    db_path = Path(request["db_path"])
+    base_section_hash = request["base_section_hash"]
+    base_metadata_hash = request["base_metadata_hash"]
+    status = request.get("status", "")
+    phase = request.get("phase", "")
+
+    text = project_path.read_text(encoding="utf-8")
+    if schema_version(text) < 2:
+        return {"ok": False, "kind": "invalid_operation",
+                "error": "project must be migrated to v2 first"}
+
+    # Validate hashes
+    if section_hash(text, "project-profile") != base_section_hash:
+        return {"ok": False, "kind": "stale_section",
+                "error": "project profile has changed — reload and re-edit"}
+    if metadata_hash(text) != base_metadata_hash:
+        return {"ok": False, "kind": "stale_metadata",
+                "error": "project metadata has changed — reload and re-edit"}
+
+    # Build profile content from typed fields
+    lines: list[str] = []
+    for field_key in _PROFILE_FIELDS:
+        value = request.get(field_key, "").strip()
+        # Validate each field value individually (profile subsections are structural)
+        if "<!--" in value or "\n---\n" in value:
+            return {"ok": False, "kind": "invalid_input",
+                    "error": f"field {field_key} contains control syntax"}
+        lines.append(f"### {_PROFILE_SUBSECTION_TITLES[field_key]}\n{value}\n")
+
+    profile_content = "\n".join(lines)
+
+    updated = _replace_section_raw(text, "project-profile", profile_content)
+
+    # Update status/phase in frontmatter
+    fm_updates: dict[str, str] = {}
+    if status:
+        fm_updates["status"] = status
+    if phase:
+        fm_updates["phase"] = phase
+    if fm_updates:
+        updated = update_frontmatter(updated, fm_updates)
+
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    updated = _bump_updated_text(updated, date_str)
+
+    write_project_atomically(project_path, updated)
+    init_db(db_path)
+    rebuild_index(db_path, [project_path])
+    return {"ok": True, "section_id": "project-profile"}

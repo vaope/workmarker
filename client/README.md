@@ -57,6 +57,15 @@ ls node_modules/electron/dist/electron.exe   # 应为 ~188MB
 
 > 说明：checkbox 勾选只改任务当前状态，**不写入时间线，也不会出现在日报/周报中**。要进报表必须走捕获（capture）。时间线数据仍保留给搜索、纠错和审计。
 
+## 项目文档 v2（F007 Phase A）
+
+项目文档已升级到 v2 格式（`schema_version: 2`），新增：
+
+- **项目全景（主视图默认）**：项目档案 → 当前全景 → 工作地图 → 技术概览 → 关键认知 → 关键决策 → 附件 → 事件证据 → 历史摘要，9 个区块各有所有权（需审阅 / 派生 / 结构化 / 只追加）
+- **hash 守门编辑**：需审阅区块（项目档案、技术概览、关键认知）通过模态编辑，发送 base hash，stale 时拒绝写入
+- **v1→v2 迁移**：旧项目可预览 diff → 确认迁移，自动写 `.workeventagent/backups/<project_id>/<ts>.md` 备份，原子替换，读回校验
+- **不变量**：Timeline 仍是报告/搜索/纠错/索引重建的证据源；Work Map 保持 F004 交互密度；新项目默认 v2，旧项目不强制迁移
+
 ## Reports
 
 The Reports tab can generate and save Markdown reports under `<workspace>/reports/`.

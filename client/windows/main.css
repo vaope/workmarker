@@ -368,3 +368,56 @@ button.danger.small-btn { padding: 6px 12px; font-size: 13px; border-radius: 7px
   cursor: pointer; transition: background .15s;
 }
 .recovery-banner button.resume-btn:hover { background: #eab308; }
+
+/* ── Panorama ─────────────────────────────────────────── */
+.panorama-body { padding: 0; }
+
+.panorama-header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid #1e293b;
+}
+.panorama-project-title { font-size: 1.5rem; font-weight: 700; color: #e2e8f0; margin: 0 0 8px; }
+.panorama-metadata { display: flex; gap: 12px; font-size: 0.8rem; color: #94a3b8; }
+.meta-status, .meta-phase { padding: 2px 8px; border-radius: 4px; background: #1e293b; }
+
+.panorama-section {
+  padding: 16px 24px;
+  border-bottom: 1px solid #1e293b;
+}
+.section-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.section-title { font-size: 1rem; font-weight: 600; color: #cbd5e1; margin: 0; flex: 1; }
+
+.ownership-badge {
+  font-size: 0.68rem; padding: 2px 6px; border-radius: 3px; white-space: nowrap;
+}
+.badge-reviewed { background: #1e3a5f; color: #93c5fd; }
+.badge-derived { background: #3b1f5e; color: #c4b5fd; }
+.badge-structured { background: #1f3e3b; color: #6ee7b7; }
+.badge-append { background: #3e351f; color: #fcd34d; }
+
+.edit-profile, .edit-section, .source-section {
+  background: transparent; border: 1px solid #334155; color: #94a3b8;
+  padding: 2px 8px; border-radius: 3px; font-size: 0.75rem; cursor: pointer;
+}
+.edit-profile:hover, .edit-section:hover, .source-section:hover { background: #1e293b; color: #e2e8f0; }
+
+.section-body { font-size: 0.85rem; color: #94a3b8; line-height: 1.6; }
+.section-body code { background: #1e293b; padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; }
+.section-empty { color: #475569; font-style: italic; }
+
+.panorama-workmap { background: #0a1620; }
+
+details.panorama-collapsed { padding: 12px 24px; border-bottom: 1px solid #1e293b; }
+details.panorama-collapsed > summary { cursor: pointer; color: #94a3b8; font-size: 0.9rem; font-weight: 600; display: flex; align-items: center; gap: 8px; list-style: none; }
+details.panorama-collapsed > summary::-webkit-details-marker { display: none; }
+details.panorama-collapsed > summary::before { content: '▸'; font-size: 0.7rem; color: #64748b; margin-right: 4px; transition: transform 0.15s; }
+details.panorama-collapsed[open] > summary::before { transform: rotate(90deg); }
+
+.migration-card { background: #1a2740; border: 1px solid #3b5998; border-radius: 8px; padding: 16px 20px; margin: 16px 24px; }
+.migration-card-content h3 { margin: 0 0 8px; color: #93c5fd; font-size: 1rem; }
+.migration-card-content p { margin: 0 0 12px; color: #94a3b8; font-size: 0.85rem; }
+
+.diff-view { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 6px; font-size: 0.75rem; max-height: 300px; overflow: auto; white-space: pre-wrap; margin: 12px 0; }
+.migration-intro { color: #94a3b8; font-size: 0.85rem; margin-bottom: 16px; }
+
+#section-modal-content { width: 100%; min-height: 180px; }

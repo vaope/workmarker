@@ -4,6 +4,9 @@ import json
 import re
 from pathlib import Path
 
+from workeventagent.project_schema import parse_frontmatter, parse_timeline_events
+from workeventagent.work_map_store import parse_work_map
+
 
 def build_search_documents(workspace: Path) -> list[dict]:
     """Scan workspace for all searchable content: projects, items, tasks, timeline, reports."""
@@ -16,7 +19,7 @@ def build_search_documents(workspace: Path) -> list[dict]:
         except (OSError, UnicodeDecodeError):
             continue
 
-        frontmatter = _parse_frontmatter(text)
+        frontmatter = parse_frontmatter(text)
         project_id = frontmatter.get("project_id", md.stem)
         project_title = frontmatter.get("title", project_id)
 
@@ -32,66 +35,52 @@ def build_search_documents(workspace: Path) -> list[dict]:
             "timestamp": "",
         })
 
-        # Items
-        for m in re.finditer(r"### Item: (.+?) <!-- item:(.+?) -->", text):
-            item_title = m.group(1).strip()
-            item_id = m.group(2)
-            bg = ""
-            bg_m = re.search(rf"<!-- item:{re.escape(item_id)} -->\n- background: (.+)", text)
-            if bg_m:
-                bg = bg_m.group(1).strip()
+        # Items and Tasks from shared parser
+        try:
+            items = parse_work_map(text)
+        except ValueError:
+            items = []
+        for item in items:
             docs.append({
                 "kind": "item",
-                "title": item_title,
-                "snippet": bg,
+                "title": item["title"],
+                "snippet": item.get("background", ""),
                 "path": str(md),
                 "project_id": project_id,
-                "item_id": item_id,
+                "item_id": item["item_id"],
                 "task_id": "",
                 "event_id": "",
                 "timestamp": "",
             })
+            for task in item.get("tasks", []):
+                docs.append({
+                    "kind": "task",
+                    "title": task["title"],
+                    "snippet": task.get("next_action", ""),
+                    "path": str(md),
+                    "project_id": project_id,
+                    "item_id": item["item_id"],
+                    "task_id": task["task_id"],
+                    "event_id": "",
+                    "timestamp": "",
+                })
 
-        # Tasks
-        for m in re.finditer(r"#### Task: (.+?) <!-- task:(.+?) -->", text):
-            task_title = m.group(1).strip()
-            task_id = m.group(2)
-            docs.append({
-                "kind": "task",
-                "title": task_title,
-                "snippet": "",
-                "path": str(md),
-                "project_id": project_id,
-                "item_id": "",
-                "task_id": task_id,
-                "event_id": "",
-                "timestamp": "",
-            })
-
-        # Timeline events
-        event_pattern = re.compile(
-            r"- (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}) <!-- event:(.+?) -->\n"
-            r"(?:  - .+\n)*?  - summary: (.+)",
-            re.MULTILINE,
-        )
-        for m in event_pattern.finditer(text):
-            timestamp = m.group(1)
-            event_id = m.group(2)
-            summary = m.group(3).strip()
-            task_id = ""
-            tid_match = re.search(rf"<!-- event:{re.escape(event_id)} -->\n  - task_id: (.+)", text)
-            if tid_match:
-                task_id = tid_match.group(1).strip()
+        # Timeline events from shared parser
+        try:
+            events = parse_timeline_events(text)
+        except ValueError:
+            events = []
+        for te in events:
             docs.append({
                 "kind": "timeline",
-                "title": summary,
-                "snippet": "",
+                "title": te.get("summary", ""),
+                "snippet": te.get("input", ""),
                 "path": str(md),
                 "project_id": project_id,
                 "item_id": "",
-                "task_id": task_id,
-                "event_id": event_id,
-                "timestamp": timestamp,
+                "task_id": te.get("task_id", ""),
+                "event_id": te.get("event_id", ""),
+                "timestamp": te.get("timestamp", ""),
             })
 
     # Scan report files
@@ -172,15 +161,3 @@ def search_workspace(workspace: Path, query: str, limit: int = 50) -> list[dict]
 
     results.sort(key=lambda x: x[0], reverse=True)
     return [r[1] for r in results[:limit]]
-
-
-def _parse_frontmatter(text: str) -> dict:
-    m = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
-    if not m:
-        return {}
-    result: dict = {}
-    for line in m.group(1).split("\n"):
-        kv = line.split(":", 1)
-        if len(kv) == 2:
-            result[kv[0].strip()] = kv[1].strip()
-    return result

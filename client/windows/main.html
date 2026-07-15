@@ -54,7 +54,7 @@
       <header class="content-head">
         <div class="head-left">
           <div class="tabs">
-            <button class="tab active" data-view="tasks">工作地图</button>
+            <button class="tab active" data-view="tasks">项目全景</button>
             <button class="tab" data-view="reports">报告</button>
             <button class="tab" data-view="inbox">收件箱</button>
             <button class="tab" data-view="search">搜索</button>
@@ -65,7 +65,8 @@
       </header>
 
       <section id="tasks-view" class="view">
-        <div id="tasks-body" class="scroll-body"></div>
+        <div id="panorama-body" class="panorama-body"></div>
+        <div id="tasks-body" class="scroll-body hidden"></div>
       </section>
 
       <section id="reports-view" class="view hidden">
@@ -158,6 +159,19 @@
         <input id="init-id" type="text" placeholder="自动生成，可手动修改" />
         <span class="hint">小写字母、数字、连字符。保存后不可随意更改。</span>
       </label>
+      <label class="field">状态 <select id="init-status">
+        <option value="active">进行中</option>
+        <option value="paused">暂停</option>
+        <option value="completed">已完成</option>
+        <option value="archived">已归档</option>
+      </select></label>
+      <label class="field">阶段 <select id="init-phase">
+        <option value="discovery">探索</option>
+        <option value="planning">计划</option>
+        <option value="implementation">实现</option>
+        <option value="delivery">交付</option>
+        <option value="maintenance">维护</option>
+      </select></label>
       <div class="field-label">初始工作项（可选，建议至少一个工作项 + 一个任务）</div>
       <div class="init-items" id="init-items"></div>
       <button id="init-add-item" class="ghost">+ 添加工作项</button>
@@ -220,6 +234,10 @@
         <input id="settings-hotkey" type="text" placeholder="CommandOrControl+Shift+Space" />
         <span class="hint">示例：CommandOrControl+Shift+Space、Alt+Space、Control+Alt+W</span>
       </label>
+      <label class="field">主窗口快捷键
+        <input id="settings-main-hotkey" type="text" placeholder="CommandOrControl+Shift+M" />
+        <span class="hint">示例：CommandOrControl+Shift+M、Alt+M、Control+Alt+H</span>
+      </label>
       <label class="field">opencode 模型
         <input id="settings-model" type="text" placeholder="provider/model，留空使用 opencode 默认" />
         <span class="hint">示例：anthropic/claude-sonnet-4-5、openai/gpt-5.1</span>
@@ -273,9 +291,76 @@
     </div>
   </div>
 
+  <!-- 迁移模态 -->
+  <div id="migration-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>迁移到项目文档 v2</h2>
+      <p class="migration-intro">当前项目使用旧版格式。迁移后可在项目全景中查看和编辑。</p>
+      <label class="field">状态 <select id="migration-status">
+        <option value="active">进行中</option>
+        <option value="paused">暂停</option>
+        <option value="completed">已完成</option>
+        <option value="archived">已归档</option>
+      </select></label>
+      <label class="field">阶段 <select id="migration-phase">
+        <option value="discovery">探索</option>
+        <option value="planning">计划</option>
+        <option value="implementation">实现</option>
+        <option value="delivery">交付</option>
+        <option value="maintenance">维护</option>
+      </select></label>
+      <button id="migration-preview" class="primary">预览变更</button>
+      <pre id="migration-diff" class="diff-view hidden"></pre>
+      <div class="modal-actions">
+        <button id="migration-apply" class="primary hidden">确认迁移</button>
+        <button id="migration-cancel" class="ghost">取消</button>
+      </div>
+      <div id="migration-error" class="modal-error hidden"></div>
+    </div>
+  </div>
+
+  <!-- 项目档案编辑模态 -->
+  <div id="project-profile-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>编辑项目档案</h2>
+      <label class="field">状态 <select id="profile-status">
+        <option value="active">进行中</option><option value="paused">暂停</option>
+        <option value="completed">已完成</option><option value="archived">已归档</option>
+      </select></label>
+      <label class="field">阶段 <select id="profile-phase">
+        <option value="discovery">探索</option><option value="planning">计划</option>
+        <option value="implementation">实现</option><option value="delivery">交付</option>
+        <option value="maintenance">维护</option>
+      </select></label>
+      <label class="field">背景 <textarea id="profile-background" rows="2" placeholder="为什么启动这个项目"></textarea></label>
+      <label class="field">目标 <textarea id="profile-goal" rows="2" placeholder="项目要达成的核心目标"></textarea></label>
+      <label class="field">范围 <textarea id="profile-scope" rows="2" placeholder="边界和约束"></textarea></label>
+      <label class="field">成功标准 <textarea id="profile-criteria" rows="2" placeholder="如何判断项目成功"></textarea></label>
+      <div class="modal-actions">
+        <button id="profile-save" class="primary">保存</button>
+        <button id="profile-cancel" class="ghost">取消</button>
+      </div>
+      <div id="profile-error" class="modal-error hidden"></div>
+    </div>
+  </div>
+
+  <!-- 技术/知识区块编辑模态 -->
+  <div id="project-section-modal" class="modal hidden">
+    <div class="modal-card">
+      <h2>编辑 <span id="section-modal-title"></span></h2>
+      <textarea id="section-modal-content" rows="6" placeholder="输入内容…"></textarea>
+      <div class="modal-actions">
+        <button id="section-save" class="primary">保存</button>
+        <button id="section-cancel" class="ghost">取消</button>
+      </div>
+      <div id="section-error" class="modal-error hidden"></div>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
 
   <script src="work-map.js"></script>
+  <script src="project-panorama.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

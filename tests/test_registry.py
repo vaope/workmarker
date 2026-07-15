@@ -42,6 +42,7 @@ class RegistryTest(unittest.TestCase):
             (Path(tmp) / "multimodal-labeling.md").write_text(
                 "---\nproject_id: multimodal-labeling\ntitle: Multimodal\ndoc_kind: work_project\nupdated: 2026-07-01\n---\n"
                 "## Work Map\n"
+                "### Item: Tasks <!-- item:tasks -->\n"
                 "#### Task: blockers <!-- task:blockers -->\n- status: in_progress\n- next_action: check\n- last_event_id: ev1\n"
                 "#### Task: done-task <!-- task:done -->\n- status: done\n- next_action: \n- last_event_id: ev2\n",
                 encoding="utf-8",
