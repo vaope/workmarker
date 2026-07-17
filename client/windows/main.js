@@ -21,6 +21,7 @@ const state = {
 async function boot() {
   bindStaticHandlers();
   state.config = await wea.getConfig();
+  showStartupHotkeyWarning();
   if (!state.config.workspace) {
     enterSetup();
   } else {
@@ -45,6 +46,14 @@ function enterSetup() {
 function enterApp() {
   $('#setup').classList.add('hidden');
   $('#app').classList.remove('hidden');
+}
+
+function showStartupHotkeyWarning() {
+  if (!state.config) return;
+  if (state.config.hotkeyRegistered !== false && state.config.mainHotkeyRegistered !== false) return;
+  const kind = state.config.hotkeyErrorKind || 'registration_conflict';
+  const failed = state.config.failedHotkey || (state.config.hotkeyRegistered === false ? 'capture' : 'main');
+  toast(`快捷键注册失败(${kind}: ${failed})，请到设置更换组合键`, 'err');
 }
 
 // ---- static handlers (bound once) ----------------------------------------

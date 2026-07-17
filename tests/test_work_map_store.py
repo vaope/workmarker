@@ -1,5 +1,6 @@
 import pytest
 
+from workeventagent.project_schema import find_section
 from workeventagent.work_map_store import parse_work_map, update_task_field, update_task_state
 
 
@@ -106,3 +107,59 @@ def test_multi_item_update_task_state_does_not_delete_next_item() -> None:
     assert "<!-- task:b-task -->" in updated
     assert "#### [x] 任务：A-task <!-- task:a-task -->" in updated
     assert "Retry A." in updated
+
+
+def test_v2_update_task_field_preserves_following_section_heading() -> None:
+    updated = update_task_field(V2_MAP, "persist-card", "status", "done", "2026-07-13")
+    assert "-->## " not in updated
+    assert "<!-- section:timeline -->" in find_section(updated, "timeline").heading
+
+
+def test_v2_update_task_state_preserves_following_section_heading() -> None:
+    updated = update_task_state(V2_MAP, "persist-card", "done", "Ship fix.", "event-b")
+    assert "-->## " not in updated
+    assert "<!-- section:timeline -->" in find_section(updated, "timeline").heading
+
+
+@pytest.mark.parametrize(
+    ("source", "mutate"),
+    [
+        (
+            V1_MAP.replace("- last_event_id: event-a\n", "- last_event_id: event-a\nKeep this operator note.\n"),
+            lambda text: update_task_field(text, "persist-card", "status", "done", "2026-07-13"),
+        ),
+        (
+            V1_MAP.replace("- last_event_id: event-a\n", "- last_event_id: event-a\nKeep this operator note.\n"),
+            lambda text: update_task_state(text, "persist-card", "done", "Ship fix.", "event-b"),
+        ),
+        (
+            V2_MAP.replace(
+                "<!-- task-meta:last_event_id=event-a -->\n",
+                "<!-- task-meta:last_event_id=event-a -->\nKeep this operator note.\n",
+            ),
+            lambda text: update_task_field(text, "persist-card", "status", "done", "2026-07-13"),
+        ),
+        (
+            V2_MAP.replace(
+                "<!-- task-meta:last_event_id=event-a -->\n",
+                "<!-- task-meta:last_event_id=event-a -->\nKeep this operator note.\n",
+            ),
+            lambda text: update_task_state(text, "persist-card", "done", "Ship fix.", "event-b"),
+        ),
+    ],
+)
+def test_task_mutations_preserve_non_control_prose_byte_for_byte(source, mutate) -> None:
+    updated = mutate(source)
+    assert "\nKeep this operator note.\n## " in updated
+
+
+@pytest.mark.parametrize("source", [V1_MAP, V2_MAP])
+def test_repeated_task_updates_do_not_accumulate_blank_lines_before_heading(source: str) -> None:
+    original_prefix = source[:source.index("####")]
+
+    updated_once = update_task_state(source, "persist-card", "done", "Ship fix.", "event-b")
+    updated_twice = update_task_state(updated_once, "persist-card", "done", "Ship fix.", "event-b")
+
+    assert updated_once[:updated_once.index("####")] == original_prefix
+    assert updated_twice[:updated_twice.index("####")] == original_prefix
+    assert updated_twice == updated_once

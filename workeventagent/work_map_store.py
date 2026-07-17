@@ -256,51 +256,118 @@ def _find_next_block_boundary(text: str, pos: int) -> int:
     return pos + m.start() if m else len(text)
 
 
+def _split_line_ending(line: str) -> tuple[str, str]:
+    content = line.rstrip("\r\n")
+    return content, line[len(content):]
+
+
+def _task_field_match(line: str, schema_ver: int, field: str) -> tuple[re.Match[str], int] | None:
+    content, _ = _split_line_ending(line)
+    if field == "title":
+        match = (V2_TASK_RE if schema_ver >= 2 else V1_TASK_RE).match(content)
+        return (match, 2 if schema_ver >= 2 else 1) if match else None
+    if field == "status":
+        match = (V2_TASK_RE if schema_ver >= 2 else V1_STATUS_RE).match(content)
+        return (match, 1) if match else None
+    if field == "next_action":
+        match = (V2_NEXT_RE if schema_ver >= 2 else V1_NEXT_ACTION_RE).match(content)
+        return (match, 1) if match else None
+    if field == "last_event_id":
+        match = (V2_META_RE if schema_ver >= 2 else V1_LAST_EVENT_RE).match(content)
+        return (match, 1) if match else None
+    raise ValueError(f"unsupported task field: {field}")
+
+
+def _task_field_value(schema_ver: int, field: str, value: str) -> str:
+    rendered = str(value)
+    if schema_ver >= 2 and field == "status":
+        return "x" if rendered == "done" else " "
+    if schema_ver >= 2 and field == "next_action":
+        return rendered.replace("\n", " ").strip()
+    if field == "last_event_id":
+        return rendered.strip()
+    return rendered
+
+
+def _render_task_control_line(schema_ver: int, field: str, value: str) -> str:
+    if schema_ver >= 2:
+        if field == "next_action":
+            return f"- 下一步：{value}"
+        if field == "last_event_id":
+            return f"<!-- task-meta:last_event_id={value} -->"
+    else:
+        if field == "status":
+            return f"- status: {value}"
+        if field == "next_action":
+            return f"- next_action: {value}"
+        if field == "last_event_id":
+            return f"- last_event_id: {value}"
+    raise ValueError(f"task field must exist in heading: {field}")
+
+
+def _task_control_order(schema_ver: int) -> tuple[str, ...]:
+    if schema_ver >= 2:
+        return ("next_action", "last_event_id")
+    return ("status", "next_action", "last_event_id")
+
+
+def _preferred_newline(lines: list[str]) -> str:
+    for line in lines:
+        _, ending = _split_line_ending(line)
+        if ending:
+            return ending
+    return "\n"
+
+
+def _insert_task_control_line(lines: list[str], schema_ver: int, field: str, value: str) -> None:
+    order = _task_control_order(schema_ver)
+    if field not in order:
+        raise ValueError(f"task field must exist in heading: {field}")
+    insert_at = 1
+    for preceding_field in order[:order.index(field)]:
+        for index, line in enumerate(lines):
+            if _task_field_match(line, schema_ver, preceding_field):
+                insert_at = max(insert_at, index + 1)
+    newline = _preferred_newline(lines)
+    if insert_at > 0:
+        content, ending = _split_line_ending(lines[insert_at - 1])
+        if not ending:
+            lines[insert_at - 1] = content + newline
+    lines.insert(insert_at, _render_task_control_line(schema_ver, field, value) + newline)
+
+
+def _mutate_task_fields(text: str, task_id: str, updates: dict[str, str]) -> str:
+    schema_ver, start, heading_end = _find_task_heading(text, task_id)
+    block_end = _find_next_block_boundary(text, heading_end)
+    lines = text[start:block_end].splitlines(keepends=True)
+    for field, raw_value in updates.items():
+        value = _task_field_value(schema_ver, field, raw_value)
+        for index, line in enumerate(lines):
+            field_match = _task_field_match(line, schema_ver, field)
+            if field_match is None:
+                continue
+            match, group = field_match
+            content, ending = _split_line_ending(line)
+            value_start, value_end = match.span(group)
+            lines[index] = content[:value_start] + value + content[value_end:] + ending
+            break
+        else:
+            _insert_task_control_line(lines, schema_ver, field, value)
+    return text[:start] + "".join(lines) + text[block_end:]
+
+
 def update_task_field(text: str, task_id: str, field: str, value: str, updated_date: str = "") -> str:
     """Atomically update one field of a task block, preserving all sibling blocks byte-for-byte."""
-    v, start, end = _find_task_heading(text, task_id)
-    block_end = _find_next_block_boundary(text, end)
-    original_block = text[end:block_end]
-    parsed = parse_work_map(text)
-    task = None
-    for item in parsed:
-        for t in item.get("tasks", []):
-            if t["task_id"] == task_id:
-                task = t
-                break
-        if task:
-            break
-    if task is None:
-        raise ValueError(f"task not found: {task_id}")
-    task[field] = value
-    if v >= 2:
-        replacement = "\n" + render_v2_task(task)
-    else:
-        replacement = "\n" + render_v1_task(task)
-    return text[:start] + replacement + text[block_end:]
+    return _mutate_task_fields(text, task_id, {field: value})
 
 
 def update_task_state(text: str, task_id: str, status: str, next_action: str = "", last_event_id: str = "") -> str:
     """Atomically update status, next_action, and last_event_id on a task."""
-    v, start, end = _find_task_heading(text, task_id)
-    block_end = _find_next_block_boundary(text, end)
-    task = {
-        "task_id": task_id,
-        "title": "",  # preserved from original heading, not relevant for block replace
+    return _mutate_task_fields(text, task_id, {
         "status": status,
         "next_action": next_action,
         "last_event_id": last_event_id,
-    }
-    # Read title from heading
-    heading = text[start:end]
-    title_m = re.search(r"(?:Task:|任务[：:])\s*(.+?)\s*<!--", heading)
-    if title_m:
-        task["title"] = title_m.group(1).strip()
-    if v >= 2:
-        replacement = "\n" + render_v2_task(task)
-    else:
-        replacement = "\n" + render_v1_task(task)
-    return text[:start] + replacement + text[block_end:]
+    })
 
 
 def insert_item(text: str, item_id: str, title: str, background: str = "") -> str:

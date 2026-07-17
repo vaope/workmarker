@@ -118,11 +118,25 @@ const hotkeyManager = createHotkeyManager(globalShortcut, {
   capture: showCaptureWindow,
   main: toggleMainWindow,
 });
+let startupHotkeyRegistration = null;
+
+function withHotkeyRegistration(config) {
+  if (!startupHotkeyRegistration) {
+    return { ...config, hotkeyRegistered: true, mainHotkeyRegistered: true };
+  }
+  return {
+    ...config,
+    hotkeyRegistered: !!startupHotkeyRegistration.captureRegistered,
+    mainHotkeyRegistered: !!startupHotkeyRegistration.mainRegistered,
+    hotkeyErrorKind: startupHotkeyRegistration.ok ? undefined : startupHotkeyRegistration.kind,
+    failedHotkey: startupHotkeyRegistration.ok ? undefined : startupHotkeyRegistration.failed,
+  };
+}
 
 // --- IPC -------------------------------------------------------------------
 
 function attachIpc() {
-  ipcMain.handle('wea:getConfig', () => loadConfig());
+  ipcMain.handle('wea:getConfig', () => withHotkeyRegistration(loadConfig()));
 
   ipcMain.handle('wea:setWorkspace', (_e, { workspace }) => {
     const merged = saveConfig({ workspace });
@@ -139,16 +153,25 @@ function attachIpc() {
     }
     if (!hasHotkey) {
       const merged = saveConfig(patch || {});
-      return { ...merged, hotkeyRegistered: true, mainHotkeyRegistered: true };
+      return withHotkeyRegistration(merged);
     }
     const registration = hotkeyManager.registerPair({
       capture: candidate.hotkey,
       main: candidate.mainHotkey,
     });
     if (registration.ok) {
+      startupHotkeyRegistration = { ok: true, captureRegistered: true, mainRegistered: true, active: { ...registration.active } };
       const merged = saveConfig(patch || {});
       return { ...merged, hotkeyRegistered: true, mainHotkeyRegistered: true };
     }
+    startupHotkeyRegistration = {
+      ok: false,
+      kind: registration.kind,
+      failed: registration.failed,
+      captureRegistered: !!registration.active.capture,
+      mainRegistered: !!registration.active.main,
+      active: { ...registration.active },
+    };
     const reverted = saveConfig({ ...patch, hotkey: registration.active.capture, mainHotkey: registration.active.main });
     return {
       ...reverted,
@@ -563,7 +586,7 @@ if (!gotLock) {
     createCaptureWindow();
     setupTray();
     const config = cfg();
-    hotkeyManager.registerStartupPair({ capture: config.hotkey, main: config.mainHotkey });
+    startupHotkeyRegistration = hotkeyManager.registerStartupPair({ capture: config.hotkey, main: config.mainHotkey });
     startReportScheduler();
 
     app.on('activate', () => {
