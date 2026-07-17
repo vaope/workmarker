@@ -62,6 +62,15 @@ def test_main_window_uses_project_panorama_as_default_surface() -> None:
     assert "wea.applyProjectMigration" in source
 
 
+def test_project_panorama_reuses_the_vertical_scroll_container() -> None:
+    html = Path("client/windows/main.html").read_text(encoding="utf-8")
+    css = Path("client/windows/main.css").read_text(encoding="utf-8")
+
+    assert 'id="panorama-body" class="panorama-body scroll-body"' in html
+    content_rule = css[css.index(".content {"):css.index(".content-head {")]
+    assert "min-height: 0" in content_rule
+
+
 def test_reviewed_section_editors_send_base_hashes() -> None:
     source = Path("client/windows/main.js").read_text(encoding="utf-8")
     assert "baseSectionHash" in source
