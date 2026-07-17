@@ -110,3 +110,26 @@ def test_hotkey_config_failure_returns_previous_pair() -> None:
     assert "registration.active.main" in update
     assert "hotkeyRegistered: false" in update
     assert "mainHotkeyRegistered: false" in update
+
+
+def test_startup_registration_failure_is_exposed_in_config() -> None:
+    source = Path("client/main.js").read_text(encoding="utf-8")
+    get_config = source[source.index("ipcMain.handle('wea:getConfig'"):source.index("ipcMain.handle('wea:setWorkspace'")]
+    helper = source[source.index("function withHotkeyRegistration"):source.index("// --- IPC")]
+    startup = source[source.index("const config = cfg();"):source.index("startReportScheduler();")]
+    assert "startupHotkeyRegistration" in source
+    assert "startupHotkeyRegistration = hotkeyManager.registerStartupPair" in startup
+    assert "withHotkeyRegistration(loadConfig())" in get_config
+    assert "hotkeyRegistered:" in helper
+    assert "mainHotkeyRegistered:" in helper
+    assert "hotkeyErrorKind:" in helper
+    assert "failedHotkey:" in helper
+
+
+def test_renderer_surfaces_startup_hotkey_failure() -> None:
+    source = Path("client/windows/main.js").read_text(encoding="utf-8")
+    boot = source[source.index("async function boot()"):source.index("function enterSetup()")]
+    assert "showStartupHotkeyWarning()" in boot
+    assert "function showStartupHotkeyWarning()" in source
+    assert "mainHotkeyRegistered" in source
+    assert "hotkeyErrorKind" in source
