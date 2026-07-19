@@ -54,6 +54,7 @@ created: 2026-07-19
 <workspace>/.workeventagent/knowledge/
   jobs/<job_id>.json
   proposals/<proposal_id>.json
+  runs/<run_id>.json
 ```
 
 Job states:
@@ -73,6 +74,15 @@ needs_confirmation -> applying -> applied
                   \-> superseded
                   \-> stale
 ```
+
+Schedule-run states:
+
+```text
+enqueuing -> processing -> completed
+                       \-> failed
+```
+
+A schedule-run manifest is written before its first child job. It snapshots every schema-v2 project ID/path and the deterministic child-job ID expected for that cadence key. A restart fills in missing children from the manifest before it evaluates run completion. The daily/weekly success marker can advance only from a `completed` manifest, never by counting whatever child jobs happen to exist after a partial enqueue.
 
 Section proposal bundle shape:
 
@@ -187,11 +197,8 @@ Create `.opencode/agent/workevent-synthesizer.md` with read-only tools and this 
 
 ```json
 {
-  "filename": "architecture.md",
   "purpose": "string",
-  "module_id": "architecture",
   "title": "Architecture",
-  "order": 10,
   "retained_summary": "string",
   "module_conclusion": {"paragraphs": ["string"], "bullets": ["string"]},
   "module_body": {"paragraphs": ["string"], "bullets": ["string"]}
@@ -206,6 +213,8 @@ The prompt must state:
 - do not infer project status/phase from task completion;
 - do not emit headings, HTML comments, frontmatter, file paths, IDs, or hashes;
 - suggest at most one optional document and only when concise Technical Overview is insufficient.
+
+The wrapper derives and collision-checks `module_id`, filename, and order from the title plus the current set of project modules. A document suggestion is valid only when the same synthesis output also proposes a `technical-overview` change whose rendered content contains `retained_summary`; the wrapper links the document proposal to that section bundle.
 
 - [ ] **Step 3: Run the real Archivist contract probe**
 
@@ -223,7 +232,7 @@ Expected: exit 0; NDJSON contains one text payload; JSON contains the existing a
 opencode.cmd run --agent workevent-synthesizer --file tests/fixtures/project-v2.md --format json "Directed synthesis. Use only source event event-a. Return bounded JSON for any supported section change."
 ```
 
-Expected: exit 0; JSON matches the declared shape; it contains no `project_id`, `source_event_ids`, `base_section_hash`, `proposal_id`, heading, comment, or path.
+Expected: exit 0; JSON matches the declared shape; it contains no `project_id`, `source_event_ids`, `base_section_hash`, `proposal_id`, `module_id`, filename, order, heading, comment, or path.
 
 If either real probe fails, stop before Task 1 and report the exact command/output. Do not substitute mocked success.
 
@@ -258,6 +267,14 @@ get_proposal(workspace: Path, proposal_id: str) -> dict
 list_proposals(workspace: Path, project_path: str | None = None) -> list[dict]
 transition_proposal(workspace: Path, proposal_id: str, expected_version: int,
                     from_states: set[str], to_state: str, patch: dict | None = None) -> dict
+
+run_id_for(cadence: str, schedule_key: str) -> str
+create_schedule_run(workspace: Path, cadence: str, schedule_key: str,
+                    projects: list[dict], now: datetime | None = None) -> dict
+get_schedule_run(workspace: Path, run_id: str) -> dict
+list_schedule_runs(workspace: Path) -> list[dict]
+ensure_schedule_children(workspace: Path, run_id: str) -> dict
+evaluate_schedule_run(workspace: Path, run_id: str) -> dict
 ```
 
 - [ ] **Step 1: Write failing ledger tests**
@@ -272,6 +289,9 @@ def test_recover_promotes_awaiting_source_when_event_exists(tmp_path): ...
 def test_recover_resets_interrupted_processing_to_queued(tmp_path): ...
 def test_terminal_entities_are_never_trimmed(tmp_path): ...
 def test_atomic_replace_failure_preserves_previous_entity(tmp_path, monkeypatch): ...
+def test_schedule_manifest_snapshots_all_v2_projects_before_first_child(tmp_path): ...
+def test_schedule_recovery_fills_children_after_crash_on_first_enqueue(tmp_path): ...
+def test_schedule_run_with_one_failed_child_never_completes(tmp_path): ...
 ```
 
 Use a temporary schema-v2 project with one Timeline event for recovery tests.
@@ -295,6 +315,15 @@ Rules:
 - Payload fields (`project_path`, trigger, source/date range, changes, evidence) cannot be changed by a state-only transition.
 - `recover_jobs` treats `processing` as interrupted and requeues it; `awaiting_source` becomes `queued` only if all referenced events now exist, otherwise it remains visible.
 - No cleanup function deletes any knowledge entity.
+
+Schedule-run rules:
+
+- `create_schedule_run` receives a wrapper-generated snapshot of all schema-v2 projects before any child job is written.
+- The manifest stores every expected deterministic child ID, not only children already enqueued.
+- `ensure_schedule_children` is idempotent and creates any child missing after a crash.
+- A child in `failed`, `awaiting_source`, `queued`, or `processing` prevents run completion.
+- Only `completed`, `skipped_no_evidence`, and `skipped_no_change` satisfy a child slot.
+- The manifest itself is versioned and atomic; config success markers are never written by this module.
 
 - [ ] **Step 4: Run focused tests**
 
@@ -350,6 +379,9 @@ def test_high_impact_job_is_queued_only_after_source_event_exists(...): ...
 def test_failed_project_commit_leaves_visible_recoverable_job(...): ...
 def test_commit_returns_and_inbox_archives_real_event_id(...): ...
 def test_manual_task_status_update_never_enqueues_synthesis(...): ...
+def test_retry_same_event_id_and_content_is_idempotent(...): ...
+def test_retry_same_event_id_with_different_content_is_hard_conflict(...): ...
+def test_startup_recovers_event_written_before_inbox_archive_and_job_promote(...): ...
 ```
 
 The order test must patch `handle_commit` and assert that the deterministic job file already exists in `awaiting_source` when the patched commit is entered.
@@ -371,13 +403,21 @@ Allowed dimensions are exactly the five approved values. Do not fail the archive
 For high-impact Capture Inbox proposals:
 
 1. derive idempotency key `high-impact:<project_id>:<event_id>`;
-2. enqueue `awaiting_source` before calling `handle_commit`;
+2. enqueue `awaiting_source` before calling `handle_commit`; the job stores `capture_id` so recovery can finish the Inbox transition;
 3. commit the source event atomically through the existing path;
 4. verify the event exists in Timeline;
 5. transition the job to `queued`;
 6. return `knowledge_job_id` so Electron can start the worker visibly.
 
 If source commit fails, do not synthesize. Leave a visible job with source-write diagnostic for recovery/retry. Ordinary capture returns no job ID.
+
+`handle_commit` must be idempotent by event identity before it copies attachments or mutates Markdown:
+
+- if `event_id` is absent, use the normal commit path;
+- if `event_id` exists and the canonical `task_id`, input, summary, status, and next action equal the requested event, return the original success result without a second Timeline/Work Map/attachment write;
+- if the same ID exists with different canonical content, return `event_id_conflict` and do not write.
+
+Startup recovery scans `awaiting_source` jobs. If the exact event exists, it promotes the job and archives the referenced Capture Inbox card idempotently. If the event is absent, the job remains visible/retryable. This closes the crash window after project write but before Inbox archive/job promotion; a repeated user confirmation is safe through the event-idempotent commit path.
 
 - [ ] **Step 6: Run focused and capture regressions**
 
@@ -427,7 +467,7 @@ Prove the runner selects `workevent-synthesizer`, passes `--file`, model, JSON f
 - non-string content;
 - headings, comments, frontmatter delimiters, paths, or wrapper-owned fields;
 - more than one document suggestion;
-- unsafe filenames/module IDs/order values.
+- any agent-supplied filename, `module_id`, order, or other wrapper-owned identity field.
 
 - [ ] **Step 2: Write failing source and bundle tests**
 
@@ -442,6 +482,8 @@ def test_bundle_never_targets_profile_work_map_append_only_or_rollups(...): ...
 def test_bundle_does_not_change_status_or_phase(...): ...
 def test_revision_creates_new_id_and_supersedes_old_without_mutation(...): ...
 def test_document_proposal_renders_project_module_contract_but_writes_nothing(...): ...
+def test_document_identity_filename_and_order_are_wrapper_derived_and_collision_free(...): ...
+def test_document_suggestion_requires_linked_technical_overview_with_retained_summary(...): ...
 ```
 
 - [ ] **Step 3: Verify red**
@@ -469,7 +511,7 @@ Visible content rules:
 
 - [ ] **Step 6: Implement optional module proposal rendering**
 
-Validate a single lowercase kebab-case `.md` filename and `module_id`. The wrapper—not the agent—renders frontmatter plus:
+The wrapper—not the agent—renders frontmatter plus:
 
 ```markdown
 ## 模块结论 <!-- section:module-conclusion -->
@@ -481,7 +523,11 @@ Validate a single lowercase kebab-case `.md` filename and `module_id`. The wrapp
 ...
 ```
 
-The proposal stores the rendered preview, evidence, purpose, retained main-document summary, and target path relative to `<project_id>/docs/`, but creates no directory or file.
+Before rendering, scan existing `project_module` documents for IDs, filenames, and order values. The wrapper derives a unique stable `module_id` from title, uses `<module_id>.md`, and chooses the next deterministic order slot; the agent cannot override any of them.
+
+The same agent response must contain a `technical-overview` change whose wrapper-rendered `after` includes the normalized `retained_summary`. Persist that section bundle first and store its proposal ID plus target section hash on the separate document proposal. Without this linkage, reject the document suggestion.
+
+The document proposal stores the rendered preview, evidence, purpose, retained main-document summary, wrapper-derived identity/path, linked Technical Overview proposal ID/hash, and target path relative to `<project_id>/docs/`, but creates no directory or file.
 
 - [ ] **Step 7: Run focused tests and commit**
 
@@ -503,8 +549,10 @@ git commit -m "feat: build evidence-bound synthesis proposals" -m "Why: agent pr
 
 ```text
 knowledge_enqueue
+knowledge_enqueue_schedule
 knowledge_process_job
 knowledge_state
+knowledge_recover
 knowledge_retry_job
 knowledge_revise_proposal
 knowledge_reject_proposal
@@ -519,6 +567,8 @@ def test_directed_enqueue_rejects_cross_project_or_missing_events(...): ...
 def test_high_impact_process_requires_committed_source(...): ...
 def test_daily_job_selects_only_local_date_range_evidence(...): ...
 def test_weekly_job_runs_full_review_prompt_with_week_evidence(...): ...
+def test_schedule_enqueue_persists_full_project_manifest_before_children(...): ...
+def test_schedule_recovery_completes_missing_children_after_partial_enqueue(...): ...
 def test_process_persists_proposal_before_completing_job(...): ...
 def test_agent_failure_marks_job_failed_and_leaves_project_unchanged(...): ...
 def test_no_evidence_and_no_change_are_explicit_terminal_states(...): ...
@@ -535,13 +585,14 @@ python -m pytest tests/test_gui.py -q
 
 - [ ] **Step 3: Implement thin enqueue/state handlers**
 
-`knowledge_enqueue` accepts only typed trigger inputs:
+`knowledge_enqueue` accepts only typed non-schedule trigger inputs:
 
 - `directed`: project path + one or more explicit event IDs;
-- `daily`/`weekly`: project path + explicit inclusive local date range + schedule key;
 - high-impact is created only by the trusted capture commit path from Task 2.
 
 The handler validates schema v2 and creates an idempotent job. It does not call opencode.
+
+`knowledge_enqueue_schedule` accepts cadence, inclusive local date range, and schedule key. It scans all current schema-v2 projects once, creates the complete run manifest first, then idempotently ensures every expected child job. `knowledge_recover` completes interrupted capture/outbox transitions, proposal/document applies, and schedule manifests before returning actionable state.
 
 - [ ] **Step 4: Implement the job processor**
 
@@ -607,6 +658,8 @@ def test_apply_uses_one_project_atomic_replace_for_multiple_sections(...): ...
 def test_apply_injects_source_metadata_and_bumps_updated(...): ...
 def test_readback_verifies_every_target_hash_before_marking_applied(...): ...
 def test_crash_after_project_write_recovers_applying_proposal_as_applied(...): ...
+def test_crash_before_project_write_resumes_applying_bundle_from_all_base_hashes(...): ...
+def test_recovery_marks_mixed_base_target_or_unknown_content_stale(...): ...
 def test_index_failure_returns_applied_with_warning_and_never_reapplies(...): ...
 def test_wrong_state_or_version_cannot_apply(...): ...
 ```
@@ -619,11 +672,15 @@ Cover:
 
 - unconfirmed proposals cannot create a directory/file;
 - target must stay inside `<workspace>/<project_id>/docs/`;
-- existing destination blocks apply and never overwrites;
+- an existing different/unowned destination blocks apply and is never overwritten;
 - confirmation creates exactly one schema-valid `project_module` file atomically;
 - missing module conclusion/body is rejected;
 - creating a module never changes the main project document;
 - no agent-supplied nested document tree is accepted.
+- a file created before ledger transition is recovered as applied when its hash equals the proposal preview;
+- an absent file resumes creation from `applying`, while an existing different file becomes stale;
+- duplicate `module_id` or filename across existing project modules blocks creation;
+- the linked Technical Overview bundle must be applied and its retained summary must still be present at the linked target hash.
 
 - [ ] **Step 3: Verify red**
 
@@ -643,11 +700,21 @@ python -m pytest tests/test_project_synthesis.py tests/test_gui.py -q
 8. Mark proposal `applied`, recording applied project content hash.
 9. Rebuild SQLite. If rebuild fails, return an `applied_index_warning`; do not make the proposal retryable.
 
-If validation fails before step 6, mark `stale` with per-section evidence and leave the project byte-identical. If the process dies after step 6, recovery compares target hashes and finishes the ledger transition without writing again.
+If validation fails before step 6, mark `stale` with per-section evidence and leave the project byte-identical.
+
+Startup and pre-apply recovery use one explicit three-way matrix for every `applying` section bundle:
+
+- every current section hash equals its recorded target hash: finish the ledger transition to `applied` without writing again;
+- every current section hash equals its recorded base hash: the confirmed apply never reached the project, so resume the same immutable in-memory transaction idempotently;
+- any mixed base/target state or any unknown hash: mark the whole bundle `stale` and do not write.
+
+The Electron startup worker must invoke this recovery before it exposes confirm/retry controls.
 
 - [ ] **Step 5: Implement separate module-document apply**
 
-Use one atomic create/replace only after path, nonexistence, preview hash, module contract, and proposal state are revalidated. The output is a source module document, not a compendium. Do not add it to Registry as a root work project.
+Use one atomic create only after path, nonexistence, preview hash, module contract, and proposal state are revalidated. Scan every existing matching `project_module` to reject duplicate IDs/filenames. Require the linked Technical Overview proposal to be `applied`, require the current Technical Overview hash to equal the linked target hash, and require its current visible content to contain the normalized retained summary.
+
+Document recovery uses the same three-way rule: exact preview hash means mark `applied`; missing target means resume the already-confirmed atomic create; any existing different content means `stale`. The output is a source module document, not a compendium. Do not add it to Registry as a root work project.
 
 - [ ] **Step 6: Run safety regressions and commit**
 
@@ -695,6 +762,9 @@ Use Node from pytest to prove:
 - failed processing does not advance a success marker;
 - completed/no-evidence/no-change processing does;
 - daily and weekly can both be due without overwriting each other's config.
+- a two-project run writes a manifest for both projects before the first child enqueue;
+- crashing after the first child enqueue is recovered by creating the missing second child;
+- one failed child keeps the manifest and config marker incomplete.
 
 - [ ] **Step 2: Write failing IPC/worker static guards**
 
@@ -723,7 +793,7 @@ Add:
 }
 ```
 
-The existing interval invokes the helper, but each due run first calls `knowledge_enqueue`. It marks success only after processing results are terminal-success/no-op.
+The existing interval invokes the helper, but each due cadence first asks the backend to create a durable schedule-run manifest containing the complete current schema-v2 project snapshot and every expected child job ID. Only after the manifest exists may child jobs be enqueued. Restart recovery completes missing children from the manifest. The helper marks config success only after the backend reports that exact manifest `completed`; it never infers success from a partial/global job list.
 
 - [ ] **Step 5: Implement the serial worker and recovery**
 
@@ -731,6 +801,7 @@ The existing interval invokes the helper, but each due run first calls `knowledg
 - Inbox commit enqueues the returned high-impact job on that chain and immediately emits visible queued status.
 - Manual directed synthesis awaits the same chain and displays progress.
 - App startup calls backend recovery/state, then queues recoverable jobs.
+- Startup first recovers interrupted capture commits, `applying` section/document proposals, and incomplete schedule-run manifests; only then does it queue jobs or render actionable controls.
 - Scheduled work and manual work use the same queue.
 - Every job/proposal transition emits `wea:knowledge-updated` to the main window.
 - A worker error is caught, persisted by the backend, and leaves the queue usable for the next job.
@@ -877,14 +948,17 @@ In a temporary workspace with a schema-v2 project, use a deterministic fake open
 
 1. ordinary confirmed capture archives normally and creates no synthesis job;
 2. a high-impact capture shows impact before confirmation, then leaves a durable queued job before synthesis;
-3. killing/restarting between queue and process recovers the job;
-4. directed selection of one and multiple events generates evidence-bound proposals;
-5. daily/weekly enqueue is idempotent and failures do not mark success;
-6. agent failure leaves project Markdown byte-identical and a retryable error;
-7. stale one-of-many base hash rejects the whole bundle;
-8. confirmed bundle changes only the three allowed sections, preserves all other bytes, and exposes source IDs;
-9. optional module file does not exist before its separate confirmation and is contract-valid afterward;
-10. applying synthesis never creates a new synthesis job.
+3. killing after event write but before Inbox archive/job promotion recovers both without a duplicate event;
+4. killing before and after section-bundle project write exercises the base/target/conflict recovery matrix;
+5. killing after optional module create but before ledger transition recovers by exact content hash;
+6. killing after the first child of a two-project schedule run recovers the manifest and missing child;
+7. directed selection of one and multiple events generates evidence-bound proposals;
+8. daily/weekly enqueue is idempotent, snapshots all projects, and failures do not mark success;
+9. agent failure leaves project Markdown byte-identical and a retryable error;
+10. stale one-of-many base hash rejects the whole bundle;
+11. confirmed bundle changes only the three allowed sections, preserves all other bytes, and exposes source IDs;
+12. optional module identity/path/order are wrapper-owned, the file does not exist before separate confirmation, and Technical Overview still contains the retained summary afterward;
+13. applying synthesis never creates a new synthesis job.
 
 - [ ] **Step 5: Run isolated Electron acceptance at 1040×700**
 
@@ -933,8 +1007,8 @@ git show --check --stat --oneline -1
 | Reviewed/derived ownership preserved | all-or-nothing apply byte-preservation tests |
 | Stale hash/source rejection | domain apply + GUI integration + runtime stale scenario |
 | No status/phase inference from completion | agent prompt probe + bundle frontmatter preservation test |
-| Daily/weekly triggers survive failure/restart | pure schedule + ledger recovery + Electron startup worker |
-| Optional documents require confirmation | document proposal/apply tests + separate UI confirmation |
+| Daily/weekly triggers survive partial enqueue/failure/restart | durable run manifest + child recovery + pure schedule + Electron startup worker |
+| Optional documents require confirmation and preserve the main summary | wrapper-owned module identity + linked Technical Overview/hash + document recovery + separate UI confirmation |
 | No recursive synthesis loop | apply integration asserts no new job |
 
 ## Self-Review Checklist Before Implementation Handoff
@@ -943,13 +1017,16 @@ git show --check --stat --oneline -1
 - [ ] Capture Inbox retention cannot delete or mutate a knowledge entity.
 - [ ] There is no monolithic knowledge JSON read-modify-write race.
 - [ ] The high-impact job exists before its source commit can become externally visible without an outbox record.
+- [ ] Retrying or recovering a committed `event_id` is content-idempotent and cannot duplicate or silently conflict.
 - [ ] The agent owns no ID, source set, hash, path, anchor, heading, or control comment.
 - [ ] Ordinary capture performs no synthesizer call.
 - [ ] No deterministic heuristic treats task completion as project impact/status/phase.
 - [ ] Bundle application has one full-document atomic write and no partial success response.
 - [ ] Optional document creation is a separate atomic confirmation.
+- [ ] Optional module identity/order/path are wrapper-owned, unique across modules, and linked to an applied retained Technical Overview summary.
 - [ ] Proposal/job states are durable, versioned, visible, retryable where safe, and never trimmed.
-- [ ] Scheduler markers represent completed durable work, not timer invocation.
+- [ ] Every `applying` project/document state has exact target/base/conflict recovery behavior and startup invokes it.
+- [ ] Scheduler markers represent a completed durable run manifest with a predeclared project/child set, not timer invocation or a partial job list.
 - [ ] All client IPC is typed and preload-scoped.
 - [ ] Real opencode and real Electron probes are explicit gates, not optional follow-ups.
 - [ ] The plan does not begin Phase C before Phase B independent review and merged-runtime acceptance.
