@@ -52,6 +52,18 @@ def run_reporter(
     )
 
 
+def run_project_synthesizer(
+    prompt: str, project_doc: Path, opencode_bin: str = "opencode", model: str = ""
+) -> str:
+    return _run_opencode_agent(
+        prompt=prompt,
+        input_doc=project_doc,
+        agent_name="workevent-synthesizer",
+        opencode_bin=opencode_bin,
+        model=model,
+    )
+
+
 def _run_opencode_agent(
     prompt: str,
     input_doc: Path,
@@ -193,6 +205,127 @@ def parse_knowledge_impact(raw: str) -> dict:
         "dimensions": list(dict.fromkeys(dimensions)),
         "reason": clean_reason,
     }
+
+
+_SYNTHESIS_TARGETS = {"current-panorama", "technical-overview", "project-knowledge"}
+_AGENT_FORBIDDEN_KEYS = {
+    "project_id",
+    "proposal_id",
+    "job_id",
+    "source_event_ids",
+    "base_section_hash",
+    "target_section_hash",
+    "module_id",
+    "filename",
+    "order",
+    "path",
+    "file_path",
+    "heading",
+    "anchor",
+    "comment",
+}
+
+
+def _bounded_narrative(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise OpencodeRunnerError(f"{field} must be a string")
+    text = value.replace("\r\n", "\n").replace("\r", "\n")
+    if (
+        "<!--" in text
+        or re.search(r"(?m)^#{1,6}\s", text)
+        or re.search(r"(?m)^---\s*$", text)
+        or re.search(r"[A-Za-z]:[\\/]", text)
+        or re.search(r"(?:^|\s)(?:\.\.?[\\/]|/[A-Za-z0-9_.-])", text)
+        or "\\\\" in text
+    ):
+        raise OpencodeRunnerError(f"{field} contains forbidden structure or path")
+    return text
+
+
+def _parse_content_block(value: object, field: str) -> dict:
+    if not isinstance(value, dict) or set(value) != {"paragraphs", "bullets"}:
+        raise OpencodeRunnerError(f"{field} must contain exactly paragraphs and bullets")
+    paragraphs = value["paragraphs"]
+    bullets = value["bullets"]
+    if not isinstance(paragraphs, list) or not isinstance(bullets, list):
+        raise OpencodeRunnerError(f"{field} paragraphs and bullets must be arrays")
+    return {
+        "paragraphs": [
+            _bounded_narrative(item, f"{field}.paragraphs") for item in paragraphs
+        ],
+        "bullets": [_bounded_narrative(item, f"{field}.bullets") for item in bullets],
+    }
+
+
+def _reject_forbidden_agent_keys(value: object) -> None:
+    if isinstance(value, dict):
+        forbidden = sorted(set(value) & _AGENT_FORBIDDEN_KEYS)
+        if forbidden:
+            raise OpencodeRunnerError(f"agent returned wrapper-owned fields: {forbidden}")
+        for nested in value.values():
+            _reject_forbidden_agent_keys(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            _reject_forbidden_agent_keys(nested)
+
+
+def parse_synthesis_output(raw: str) -> dict:
+    """Parse the read-only synthesizer response without accepting control data."""
+    try:
+        data = json.loads(_extract_json_text(raw))
+    except json.JSONDecodeError as exc:
+        raise OpencodeRunnerError(f"invalid JSON from synthesizer: {exc}") from exc
+    if not isinstance(data, dict) or set(data) != {"changes", "document_suggestion"}:
+        raise OpencodeRunnerError("synthesizer output must contain exactly changes and document_suggestion")
+    _reject_forbidden_agent_keys(data)
+    if not isinstance(data["changes"], list):
+        raise OpencodeRunnerError("changes must be an array")
+
+    targets: set[str] = set()
+    changes: list[dict] = []
+    for index, change in enumerate(data["changes"]):
+        if not isinstance(change, dict) or set(change) != {"target_section", "reason", "content"}:
+            raise OpencodeRunnerError(f"changes[{index}] has an invalid shape")
+        target = change["target_section"]
+        if target not in _SYNTHESIS_TARGETS:
+            raise OpencodeRunnerError(f"unknown target section: {target}")
+        if target in targets:
+            raise OpencodeRunnerError(f"duplicate target section: {target}")
+        targets.add(target)
+        changes.append(
+            {
+                "target_section": target,
+                "reason": _bounded_narrative(change["reason"], f"changes[{index}].reason"),
+                "content": _parse_content_block(change["content"], f"changes[{index}].content"),
+            }
+        )
+
+    suggestion = data["document_suggestion"]
+    parsed_suggestion = None
+    if suggestion is not None:
+        required = {
+            "purpose",
+            "title",
+            "retained_summary",
+            "module_conclusion",
+            "module_body",
+        }
+        if not isinstance(suggestion, dict) or set(suggestion) != required:
+            raise OpencodeRunnerError("document_suggestion has an invalid shape")
+        parsed_suggestion = {
+            "purpose": _bounded_narrative(suggestion["purpose"], "document_suggestion.purpose"),
+            "title": _bounded_narrative(suggestion["title"], "document_suggestion.title"),
+            "retained_summary": _bounded_narrative(
+                suggestion["retained_summary"], "document_suggestion.retained_summary"
+            ),
+            "module_conclusion": _parse_content_block(
+                suggestion["module_conclusion"], "document_suggestion.module_conclusion"
+            ),
+            "module_body": _parse_content_block(
+                suggestion["module_body"], "document_suggestion.module_body"
+            ),
+        }
+    return {"changes": changes, "document_suggestion": parsed_suggestion}
 
 
 def _normalize_status(raw_status: object) -> str:
