@@ -2666,6 +2666,29 @@ class PhaseBKnowledgeHandlersTest(unittest.TestCase):
             self.assertEqual({item["proposal_kind"] for item in proposals}, {"section_bundle", "module_document"})
 
     @patch("workeventagent.gui.run_project_synthesizer")
+    def test_unicode_title_line_separators_fail_before_proposal_persistence(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        for separator in ("\u0085", "\u2028", "\u2029"):
+            with self.subTest(separator=ascii(separator)), tempfile.TemporaryDirectory() as tmp:
+                workspace = Path(tmp)
+                project = self._setup_project(workspace)
+                output = json.loads(self._agent_output("technical-overview", with_document=True))
+                output["document_suggestion"]["title"] = f"Architecture{separator}---"
+                run_synthesizer.return_value = json.dumps(output)
+                enqueued = gui_module.handle_knowledge_enqueue({
+                    "workspace": str(workspace), "trigger": "directed", "project_path": str(project),
+                    "event_ids": ["event-a"],
+                })
+
+                result = gui_module.handle_knowledge_process_job({
+                    "workspace": str(workspace), "job_id": enqueued["job"]["job_id"]
+                })
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(list_knowledge_proposals(workspace), [])
+
+    @patch("workeventagent.gui.run_project_synthesizer")
     def test_revision_persists_subset_then_supersedes_old_with_cas(self, run_synthesizer):
         from workeventagent import gui as gui_module
 

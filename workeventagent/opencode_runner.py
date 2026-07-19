@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from workeventagent.models import ArchiveProposal, TargetRef, TimelineEvent
+from workeventagent.text_validation import is_single_printable_line
 
 
 class OpencodeRunnerError(Exception):
@@ -259,7 +260,7 @@ def _parse_content_block(value: object, field: str) -> dict:
 
 def _bounded_single_line(value: object, field: str) -> str:
     text = _bounded_narrative(value, field)
-    if "\n" in text or not text.strip():
+    if not is_single_printable_line(text):
         raise OpencodeRunnerError(f"{field} must be a non-empty single-line string")
     return text
 

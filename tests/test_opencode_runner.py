@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 import unittest
@@ -120,17 +121,24 @@ class ProjectSynthesizerRunnerTest(unittest.TestCase):
                 with self.assertRaises(OpencodeRunnerError):
                     parse_synthesis_output(raw)
 
-    def test_parser_rejects_multiline_document_title(self):
-        raw = (
-            '{"changes":[],"document_suggestion":{"purpose":"p",'
-            '"title":"Architecture\\nextra_control: agent-owned",'
-            '"retained_summary":"summary",'
-            '"module_conclusion":{"paragraphs":["c"],"bullets":[]},'
-            '"module_body":{"paragraphs":["b"],"bullets":[]}}}'
-        )
+    def test_parser_rejects_all_unicode_document_title_line_separators(self):
+        for separator in ("\n", "\u0085", "\u2028", "\u2029"):
+            raw = json.dumps(
+                {
+                    "changes": [],
+                    "document_suggestion": {
+                        "purpose": "p",
+                        "title": f"Architecture{separator}extra_control: agent-owned",
+                        "retained_summary": "summary",
+                        "module_conclusion": {"paragraphs": ["c"], "bullets": []},
+                        "module_body": {"paragraphs": ["b"], "bullets": []},
+                    },
+                }
+            )
 
-        with self.assertRaises(OpencodeRunnerError):
-            parse_synthesis_output(raw)
+            with self.subTest(separator=ascii(separator)):
+                with self.assertRaises(OpencodeRunnerError):
+                    parse_synthesis_output(raw)
 
 
 _EXAMPLE_NDJSON = """\

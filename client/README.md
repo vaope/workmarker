@@ -2,7 +2,7 @@
 
 WorkEventAgent 的桌面客户端，在已验证的 Python 归档核心外包一层桌面壳。
 
-- 归档核心：`../workeventagent/`（Python，352 tests + 19 subtests 全绿）
+- 归档核心：`../workeventagent/`（Python，356 tests + 26 subtests 全绿）
 - LLM 入口：opencode（唯一）
 - 真相源：项目 Markdown；索引：SQLite；附件：`<workspace>/attachments/`
 
@@ -92,7 +92,7 @@ Manual reports support explicit `date_from` and `date_to` values.
 
 ## 已验证
 
-- 352 Python tests + 19 subtests 全绿（含 Python bridge 模块入口、知识账本、崩溃恢复、周期 manifest、整包原子应用、可选模块治理与 renderer）
+- 356 Python tests + 26 subtests 全绿（含 Python bridge 模块入口、知识账本、崩溃恢复、周期 manifest、整包原子应用、可选模块治理、Unicode 行分隔符守门与 renderer）
 - 真实 opencode 端到端归档闭环（init → propose → commit → timeline，Markdown + SQLite 真实写入）
 - opencode 1.18.1 的 `workevent-synthesizer` 真实契约 smoke：只读输入、无变化时返回有界 JSON，agent 不拥有项目/提案/来源/hash 身份字段
 - Electron v33 在隔离 workspace 和 1040×700 窗口下完成 Phase B 12 项程序化验收：事件选择、统一审核、证据/diff、HTML 转义、整包确认、影响 badge、滚动/溢出、搜索定向入口、周期设置和无自动应用全部通过

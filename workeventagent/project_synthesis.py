@@ -31,6 +31,7 @@ from workeventagent.project_schema import (
 from workeventagent.markdown_store import write_project_atomically
 from workeventagent.index_store import init_db, rebuild_index
 from workeventagent.knowledge_store import get_proposal, transition_proposal
+from workeventagent.text_validation import is_single_printable_line
 
 
 ALLOWED_TARGETS = {"current-panorama", "technical-overview", "project-knowledge"}
@@ -311,10 +312,10 @@ def _normalized(value: str) -> str:
 
 
 def _safe_module_title(value: object) -> str:
-    title = str(value).strip()
+    raw_title = str(value)
+    title = raw_title.strip()
     if (
-        not title
-        or any(ord(character) < 32 for character in title)
+        not is_single_printable_line(raw_title)
         or ":" in title
         or "#" in title
         or title[0] in "-?[]{}&*!|>'\"%@`"

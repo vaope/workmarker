@@ -280,7 +280,10 @@ def test_document_suggestion_requires_linked_technical_overview_with_retained_su
         )
 
 
-def test_document_title_must_be_a_safe_single_line_frontmatter_scalar(tmp_path: Path) -> None:
+@pytest.mark.parametrize("separator", ["\n", "\u0085", "\u2028", "\u2029"])
+def test_document_title_must_be_a_safe_single_line_frontmatter_scalar(
+    tmp_path: Path, separator: str
+) -> None:
     project = _project(tmp_path)
     sources = select_source_events(project.read_text(encoding="utf-8"), event_ids=["event-a"])
     retained = "Keep the concise architecture summary."
@@ -289,7 +292,7 @@ def test_document_title_must_be_a_safe_single_line_frontmatter_scalar(tmp_path: 
     )
     suggestion = {
         "purpose": "Deep architecture",
-        "title": "Architecture\nextra_control: agent-owned",
+        "title": f"Architecture{separator}---",
         "retained_summary": retained,
         "module_conclusion": {"paragraphs": ["Conclusion"], "bullets": []},
         "module_body": {"paragraphs": ["Body"], "bullets": []},
