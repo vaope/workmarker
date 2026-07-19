@@ -2556,3 +2556,7 @@ def handle_update_project_profile(request: dict) -> dict:
     init_db(db_path)
     rebuild_index(db_path, [project_path])
     return {"ok": True, "section_id": "project-profile"}
+
+
+if __name__ == "__main__":
+    main()
