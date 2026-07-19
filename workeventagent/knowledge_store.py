@@ -28,6 +28,8 @@ _JOB_IMMUTABLE = {
     "source_event_ids",
     "date_from",
     "date_to",
+    "range_start_utc",
+    "range_end_utc",
     "schedule_run_id",
     "capture_id",
     "created_at",
@@ -43,6 +45,18 @@ _PROPOSAL_IMMUTABLE = {
     "source_events",
     "changes",
     "document",
+    "title",
+    "purpose",
+    "retained_summary",
+    "module_id",
+    "filename",
+    "order",
+    "target_path",
+    "preview",
+    "preview_hash",
+    "module_updated",
+    "linked_section_proposal_id",
+    "linked_technical_overview_hash",
     "supersedes",
     "created_at",
 }
@@ -130,7 +144,14 @@ def enqueue_job(
         "created_at": created_at,
         "updated_at": created_at,
     }
-    for key_name in ("date_from", "date_to", "schedule_run_id", "capture_id"):
+    for key_name in (
+        "date_from",
+        "date_to",
+        "range_start_utc",
+        "range_end_utc",
+        "schedule_run_id",
+        "capture_id",
+    ):
         if key_name in spec and spec[key_name] is not None:
             job[key_name] = spec[key_name]
     _write(path, job)
@@ -326,7 +347,7 @@ def create_schedule_run(
             "source_event_ids": [],
             "schedule_run_id": run_id,
         }
-        for key_name in ("date_from", "date_to"):
+        for key_name in ("date_from", "date_to", "range_start_utc", "range_end_utc"):
             if key_name in project:
                 job_spec[key_name] = project[key_name]
         expected_children.append(

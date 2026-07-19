@@ -115,6 +115,17 @@ def test_main_process_has_serial_recoverable_knowledge_worker() -> None:
     assert "enqueueKnowledgeJob" in recovery
 
 
+def test_main_process_sends_client_local_utc_boundaries_with_scheduled_jobs() -> None:
+    source = Path("client/main.js").read_text(encoding="utf-8")
+    scheduled = source[
+        source.index("async function runScheduledKnowledge"):
+        source.index("function ensurePendingDir")
+    ]
+
+    assert "range_start_utc: planned.rangeStartUtc" in scheduled
+    assert "range_end_utc: planned.rangeEndUtc" in scheduled
+
+
 def test_main_process_maps_typed_knowledge_ipc_to_bounded_backend_commands() -> None:
     source = Path("client/main.js").read_text(encoding="utf-8")
     expected = {

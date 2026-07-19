@@ -968,8 +968,16 @@ def handle_inbox_commit(request: dict) -> dict:
     if not project_path:
         return {"ok": False, "kind": "no_project", "error": "card has no selected project"}
 
+    try:
+        project_file = Path(project_path)
+        if not project_file.is_file() or not _project_within_workspace(workspace, project_file):
+            raise ValueError("selected project must be a file inside workspace")
+        project_id = _validated_project_id(project_file)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return {"ok": False, "kind": "invalid_project", "error": str(exc)}
+
     event_id = str(proposal.get("event", {}).get("event_id", ""))
-    project_id = str(proposal.get("target", {}).get("project_id", ""))
+    proposal.setdefault("target", {})["project_id"] = project_id
     impact = card.get("knowledge_impact", {})
     knowledge_job = None
     if impact.get("level") == "high":
@@ -1115,6 +1123,15 @@ def _project_within_workspace(workspace: Path, project_path: Path) -> bool:
         return False
 
 
+def _validated_project_id(project_path: Path) -> str:
+    text = Path(project_path).read_text(encoding="utf-8")
+    metadata = parse_frontmatter(text)
+    project_id = str(metadata.get("project_id", "")).strip()
+    if metadata.get("doc_kind") != "work_project" or not project_id:
+        raise ValueError("project identity is missing or invalid")
+    return project_id
+
+
 def handle_knowledge_enqueue(request: dict) -> dict:
     """Enqueue a directed job only; trusted capture owns high-impact enqueue."""
     workspace = Path(request["workspace"])
@@ -1134,7 +1151,7 @@ def handle_knowledge_enqueue(request: dict) -> dict:
         selected_sources = select_source_events(text, event_ids=event_ids)
     except ValueError as exc:
         return _knowledge_error("invalid_events", str(exc))
-    project_id = parse_frontmatter(text).get("project_id", "")
+    project_id = _validated_project_id(project_path)
     regenerate_of = str(request.get("regenerate_of", "")).strip()
     if regenerate_of:
         try:
@@ -1177,6 +1194,10 @@ def handle_knowledge_enqueue_schedule(request: dict) -> dict:
         return _knowledge_error("invalid_schedule", "cadence and schedule_key are required")
     date_from = str(request.get("date_from", ""))
     date_to = str(request.get("date_to", ""))
+    range_start_utc = str(request.get("range_start_utc", ""))
+    range_end_utc = str(request.get("range_end_utc", ""))
+    if bool(range_start_utc) != bool(range_end_utc):
+        return _knowledge_error("invalid_schedule", "UTC range requires both start and end")
     projects: list[dict] = []
     for candidate in scan_workspace(workspace):
         project_path = Path(candidate["path"])
@@ -1189,6 +1210,8 @@ def handle_knowledge_enqueue_schedule(request: dict) -> dict:
                 "project_path": str(project_path),
                 "date_from": date_from,
                 "date_to": date_to,
+                "range_start_utc": range_start_utc,
+                "range_end_utc": range_end_utc,
             }
         )
     import workeventagent.knowledge_store as knowledge_store
@@ -1236,9 +1259,13 @@ def handle_knowledge_process_job(request: dict) -> dict:
     job = transition_job(workspace, job_id, job["version"], {"queued"}, "processing")
     project_path = Path(job["project_path"])
     try:
+        if not project_path.is_file() or not _project_within_workspace(workspace, project_path):
+            raise ValueError("durable job project path must be a file inside workspace")
         text = project_path.read_text(encoding="utf-8")
         if schema_version(text) < 2:
             raise ValueError("Phase B requires schema v2")
+        if _validated_project_id(project_path) != str(job.get("project_id", "")):
+            raise ValueError("project identity does not match the durable job")
         if job["trigger"] in {"directed", "high_impact"}:
             source_events = select_source_events(text, event_ids=list(job.get("source_event_ids", [])))
         elif job["trigger"] in {"daily", "weekly"}:
@@ -1246,6 +1273,8 @@ def handle_knowledge_process_job(request: dict) -> dict:
                 text,
                 date_from=job.get("date_from"),
                 date_to=job.get("date_to"),
+                range_start_utc=job.get("range_start_utc"),
+                range_end_utc=job.get("range_end_utc"),
             )
         else:
             raise ValueError(f"unsupported knowledge trigger: {job['trigger']}")

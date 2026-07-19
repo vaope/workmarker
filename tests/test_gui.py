@@ -2240,6 +2240,21 @@ class PhaseBImpactCommitTest(unittest.TestCase):
             self.assertFalse(result["ok"])
             self.assertEqual(get_job(workspace, expected_job_id)["state"], "awaiting_source")
 
+    def test_high_impact_job_uses_frontmatter_project_id_not_agent_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, _project = self._setup_confirmed_card(workspace, impact_level="high")
+            card["proposal"]["target"]["project_id"] = "agent-forged-id"
+            update_capture(workspace, card["capture_id"], {"proposal": card["proposal"]})
+
+            result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            event_id = card["proposal"]["event"]["event_id"]
+            trusted_job = get_job(workspace, job_id_for(f"high-impact:impact-test:{event_id}"))
+            self.assertTrue(result["ok"], str(result))
+            self.assertEqual(trusted_job["project_id"], "impact-test")
+            self.assertFalse(any(job["project_id"] == "agent-forged-id" for job in list_jobs(workspace)))
+
     def test_high_impact_job_is_queued_only_after_source_event_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -2382,6 +2397,58 @@ class PhaseBKnowledgeHandlersTest(unittest.TestCase):
             self.assertNotIn("event-b", prompt)
 
     @patch("workeventagent.gui.run_project_synthesizer")
+    def test_job_consumer_rejects_project_id_that_does_not_match_frontmatter(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            job = enqueue_job(workspace, {
+                "idempotency_key": "directed:agent-forged-id:event-a",
+                "state": "queued",
+                "project_id": "agent-forged-id",
+                "project_path": str(project),
+                "trigger": "directed",
+                "source_event_ids": ["event-a"],
+            })
+
+            result = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": job["job_id"]
+            })
+
+            self.assertFalse(result["ok"])
+            self.assertIn("project identity", result["error"])
+            self.assertEqual(get_job(workspace, job["job_id"])["state"], "failed")
+            run_synthesizer.assert_not_called()
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_job_consumer_rejects_project_path_outside_workspace(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            outside = root / "outside.md"
+            outside.write_text(Path("tests/fixtures/project-v2.md").read_text(encoding="utf-8"), encoding="utf-8")
+            job = enqueue_job(workspace, {
+                "idempotency_key": "directed:outside:event-a",
+                "state": "queued",
+                "project_id": "report-project",
+                "project_path": str(outside),
+                "trigger": "directed",
+                "source_event_ids": ["event-a"],
+            })
+
+            result = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": job["job_id"]
+            })
+
+            self.assertFalse(result["ok"])
+            self.assertIn("inside workspace", result["error"])
+            run_synthesizer.assert_not_called()
+
+    @patch("workeventagent.gui.run_project_synthesizer")
     def test_weekly_job_runs_full_review_prompt_with_week_evidence(self, run_synthesizer):
         from workeventagent import gui as gui_module
 
@@ -2426,10 +2493,15 @@ class PhaseBKnowledgeHandlersTest(unittest.TestCase):
                 result = gui_module.handle_knowledge_enqueue_schedule({
                     "workspace": str(workspace), "cadence": "daily", "schedule_key": "2026-07-20",
                     "date_from": "2026-07-20", "date_to": "2026-07-20",
+                    "range_start_utc": "2026-07-19T16:00:00.000Z",
+                    "range_end_utc": "2026-07-20T16:00:00.000Z",
                 })
 
             self.assertTrue(result["ok"], str(result))
             self.assertEqual(len(result["run"]["expected_children"]), 2)
+            for child in result["run"]["expected_children"]:
+                self.assertEqual(child["job_spec"]["range_start_utc"], "2026-07-19T16:00:00.000Z")
+                self.assertEqual(child["job_spec"]["range_end_utc"], "2026-07-20T16:00:00.000Z")
 
     def test_schedule_recovery_completes_missing_children_after_partial_enqueue(self):
         from workeventagent import gui as gui_module

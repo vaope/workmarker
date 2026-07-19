@@ -456,11 +456,11 @@ Phase B 按已独立评审放行的计划 `docs/superpowers/plans/2026-07-19-pro
 
 - 持久层：job / proposal / schedule-run 均为逐实体、TTL=0、CAS/version 的原子账本；启动恢复覆盖 source commit、section bundle 与 module document 的 base/target/conflict 三分支。
 - 触发层：普通捕获不创建完整综合任务；高影响任务在事实写入前以 `awaiting_source` 落盘；定向、每日和每周入口统一进入 durable job。
-- 周期边界：schedule-run manifest 在 enqueue 前固定完整 project/child 清单，失败 child 仅阻止完成，重试后按全部 expected child IDs 重算。
+- 周期边界：Electron 将本地日历日转换为明确的 `[start, end)` UTC 边界并随 child job 持久化；schedule-run manifest 在 enqueue 前固定完整 project/child 清单，失败 child 仅阻止完成，重试后按全部 expected child IDs 重算。
 - 提案边界：agent 只返回内容与影响判断；wrapper 注入 project/source/proposal/hash/module identity。多区块 bundle 确认后 immutable，全有或全无、单次原子替换并回读验证。
-- 模块文档：wrapper 派生并防撞 `module_id`、filename、order；创建前要求 Technical Overview 的 retained summary 已确认并仍存在于主文档。
+- 模块文档：标题必须是安全单行标量，wrapper 派生并防撞 `module_id`、filename、order；apply 要求 frontmatter 精确符合七键契约，且创建前要求 Technical Overview 的 retained summary 已确认并仍存在于主文档。
 - 客户端：项目全景与 Search 可选择真实 Timeline 事件；Inbox 聚合显示独立持久化的知识任务/提案；证据、影响维度、before/after、diff、修订/拒绝/重试/过期重生及独立文档确认均可达。
-- 自动验证：`343 passed, 19 subtests passed`；11 个 client JavaScript 文件通过 `node --check`；真实 opencode 1.18.1 synthesizer bounded-JSON smoke 通过。
+- 自动验证：`352 passed, 19 subtests passed`；11 个 client JavaScript 文件通过 `node --check`；真实 opencode 1.18.1 synthesizer bounded-JSON smoke 通过。
 - Electron 验收：隔离 workspace/userData、1040×700，12/12 通过，覆盖全景入口、纵向滚动契约、Timeline 选择、统一审核、证据/diff、恶意 HTML 转义、整包确认、高影响 badge、无横向溢出、Search 定向入口、每日/每周设置以及无自动应用。
 - 验收期间发现并修复既有 Python bridge 入口缺失：`client/python_bridge.js` 使用 `python -m workeventagent.gui`，而模块此前未调用 `main()`；已补子进程回归测试，真实 Electron→Node→Python 链恢复。
 

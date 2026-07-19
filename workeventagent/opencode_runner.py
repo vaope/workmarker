@@ -257,6 +257,13 @@ def _parse_content_block(value: object, field: str) -> dict:
     }
 
 
+def _bounded_single_line(value: object, field: str) -> str:
+    text = _bounded_narrative(value, field)
+    if "\n" in text or not text.strip():
+        raise OpencodeRunnerError(f"{field} must be a non-empty single-line string")
+    return text
+
+
 def _reject_forbidden_agent_keys(value: object) -> None:
     if isinstance(value, dict):
         forbidden = sorted(set(value) & _AGENT_FORBIDDEN_KEYS)
@@ -314,7 +321,7 @@ def parse_synthesis_output(raw: str) -> dict:
             raise OpencodeRunnerError("document_suggestion has an invalid shape")
         parsed_suggestion = {
             "purpose": _bounded_narrative(suggestion["purpose"], "document_suggestion.purpose"),
-            "title": _bounded_narrative(suggestion["title"], "document_suggestion.title"),
+            "title": _bounded_single_line(suggestion["title"], "document_suggestion.title"),
             "retained_summary": _bounded_narrative(
                 suggestion["retained_summary"], "document_suggestion.retained_summary"
             ),

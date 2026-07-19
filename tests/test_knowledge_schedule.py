@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 
 
@@ -9,6 +10,7 @@ def _run(script: str) -> dict:
         text=True,
         encoding="utf-8",
         capture_output=True,
+        env={**os.environ, "TZ": "Asia/Shanghai"},
     )
     return json.loads(result.stdout)
 
@@ -45,7 +47,23 @@ def test_daily_due_uses_local_time_and_waits_when_startup_is_before_due() -> Non
         "scheduleKey": "2026-07-20",
         "dateFrom": "2026-07-20",
         "dateTo": "2026-07-20",
+        "rangeStartUtc": "2026-07-19T16:00:00.000Z",
+        "rangeEndUtc": "2026-07-20T16:00:00.000Z",
     }]
+
+
+def test_daily_due_emits_explicit_utc_boundaries_for_the_client_local_day() -> None:
+    result = _run(
+        "process.env.TZ='Asia/Shanghai';"
+        "const K=require('./client/knowledge_schedule');"
+        "const due=K.dueRuns(new Date('2026-07-20T23:31:00+08:00'),"
+        "new Date('2026-07-20T10:00:00+08:00'),"
+        f"{json.dumps(_schedule(weeklyEnabled=False))});"
+        "console.log(JSON.stringify(due[0]));"
+    )
+
+    assert result["rangeStartUtc"] == "2026-07-19T16:00:00.000Z"
+    assert result["rangeEndUtc"] == "2026-07-20T16:00:00.000Z"
 
 
 def test_startup_after_daily_due_recovers_current_run_once() -> None:
@@ -67,6 +85,8 @@ def test_weekly_due_uses_local_week_and_missed_startup() -> None:
         "scheduleKey": "2026-07-20_to_2026-07-26",
         "dateFrom": "2026-07-20",
         "dateTo": "2026-07-26",
+        "rangeStartUtc": "2026-07-19T16:00:00.000Z",
+        "rangeEndUtc": "2026-07-26T16:00:00.000Z",
     }]
 
 

@@ -13,6 +13,8 @@ from workeventagent.knowledge_store import (
 )
 from workeventagent.project_schema import find_section, parse_frontmatter, section_content, section_hash
 from workeventagent.project_synthesis import (
+    _content_hash,
+    _validate_module_contract,
     apply_document_proposal,
     apply_section_bundle,
     build_document_proposal,
@@ -73,6 +75,25 @@ def test_date_selection_uses_timeline_timestamps_inclusive(tmp_path: Path) -> No
 
     assert [event["event_id"] for event in only_first] == ["event-a"]
     assert [event["event_id"] for event in both] == ["event-a", "event-b"]
+
+
+def test_date_selection_uses_explicit_client_local_utc_boundaries_across_midnight(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    text = project.read_text(encoding="utf-8")
+    text = text.replace("2026-07-13T10:00:00+08:00", "2026-07-19T16:30:00+00:00")
+    text = text.replace("2026-07-13T11:00:00+08:00", "2026-07-20T16:00:00+00:00")
+
+    selected = select_source_events(
+        text,
+        date_from="2026-07-20",
+        date_to="2026-07-20",
+        range_start_utc="2026-07-19T16:00:00.000Z",
+        range_end_utc="2026-07-20T16:00:00.000Z",
+    )
+
+    assert [event["event_id"] for event in selected] == ["event-a"]
 
 
 def test_bundle_injects_wrapper_ids_hashes_evidence_and_control_metadata(tmp_path: Path) -> None:
@@ -257,6 +278,58 @@ def test_document_suggestion_requires_linked_technical_overview_with_retained_su
             linked_section_bundle=wrong_bundle,
             now=NOW,
         )
+
+
+def test_document_title_must_be_a_safe_single_line_frontmatter_scalar(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    sources = select_source_events(project.read_text(encoding="utf-8"), event_ids=["event-a"])
+    retained = "Keep the concise architecture summary."
+    bundle = build_section_bundle(
+        project, "directed", sources, _agent_output("technical-overview", retained_summary=retained), now=NOW
+    )
+    suggestion = {
+        "purpose": "Deep architecture",
+        "title": "Architecture\nextra_control: agent-owned",
+        "retained_summary": retained,
+        "module_conclusion": {"paragraphs": ["Conclusion"], "bullets": []},
+        "module_body": {"paragraphs": ["Body"], "bullets": []},
+    }
+
+    with pytest.raises(ValueError, match="title"):
+        build_document_proposal(
+            project, "directed", sources, suggestion, linked_section_bundle=bundle, now=NOW
+        )
+
+
+def test_module_apply_contract_rejects_extra_and_duplicate_frontmatter_keys(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    sources = select_source_events(project.read_text(encoding="utf-8"), event_ids=["event-a"])
+    retained = "Keep the concise architecture summary."
+    bundle = build_section_bundle(
+        project, "directed", sources, _agent_output("technical-overview", retained_summary=retained), now=NOW
+    )
+    suggestion = {
+        "purpose": "Deep architecture",
+        "title": "Architecture",
+        "retained_summary": retained,
+        "module_conclusion": {"paragraphs": ["Conclusion"], "bullets": []},
+        "module_body": {"paragraphs": ["Body"], "bullets": []},
+    }
+    proposal = build_document_proposal(
+        project, "directed", sources, suggestion, linked_section_bundle=bundle, now=NOW
+    )
+
+    for injected in (
+        "extra_control: agent-owned\n",
+        "title: Duplicate title\n",
+    ):
+        malicious = copy.deepcopy(proposal)
+        malicious["preview"] = malicious["preview"].replace(
+            "title: Architecture\n", f"title: Architecture\n{injected}", 1
+        )
+        malicious["preview_hash"] = _content_hash(malicious["preview"])
+        with pytest.raises(ValueError, match="frontmatter"):
+            _validate_module_contract(malicious["preview"], malicious)
 
 
 def _persisted_bundle(tmp_path: Path, *targets: str) -> tuple[Path, dict]:

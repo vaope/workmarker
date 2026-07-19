@@ -102,6 +102,8 @@ async function runScheduledKnowledge(now = new Date()) {
       schedule_key: planned.scheduleKey,
       date_from: planned.dateFrom,
       date_to: planned.dateTo,
+      range_start_utc: planned.rangeStartUtc,
+      range_end_utc: planned.rangeEndUtc,
     }, c.pythonCmd);
     results.push(enqueued);
     if (!enqueued || !enqueued.ok) {

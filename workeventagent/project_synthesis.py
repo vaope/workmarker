@@ -54,11 +54,18 @@ def _content_hash(content: str) -> str:
     return "sha256:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def _date_of(timestamp: str) -> date:
+def _datetime_of(timestamp: str) -> datetime:
     try:
-        return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).date()
+        value = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError(f"invalid Timeline timestamp: {timestamp}") from exc
+    if value.tzinfo is None:
+        raise ValueError(f"Timeline timestamp requires timezone: {timestamp}")
+    return value
+
+
+def _date_of(timestamp: str) -> date:
+    return _datetime_of(timestamp).astimezone().date()
 
 
 def select_source_events(
@@ -67,6 +74,8 @@ def select_source_events(
     event_ids: list[str] | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    range_start_utc: str | None = None,
+    range_end_utc: str | None = None,
 ) -> list[dict]:
     events = parse_timeline_events(project_text)
     if event_ids is not None:
@@ -86,6 +95,20 @@ def select_source_events(
         raise ValueError("date range must use YYYY-MM-DD") from exc
     if end < start:
         raise ValueError("date_to must be on or after date_from")
+    if bool(range_start_utc) != bool(range_end_utc):
+        raise ValueError("UTC range requires both start and end")
+    if range_start_utc and range_end_utc:
+        range_start = _datetime_of(range_start_utc).astimezone(timezone.utc)
+        range_end = _datetime_of(range_end_utc).astimezone(timezone.utc)
+        if range_end <= range_start:
+            raise ValueError("UTC range end must be after start")
+        return [
+            dict(event)
+            for event in events
+            if range_start
+            <= _datetime_of(str(event.get("timestamp", ""))).astimezone(timezone.utc)
+            < range_end
+        ]
     return [
         dict(event)
         for event in events
@@ -287,6 +310,19 @@ def _normalized(value: str) -> str:
     return " ".join(value.split())
 
 
+def _safe_module_title(value: object) -> str:
+    title = str(value).strip()
+    if (
+        not title
+        or any(ord(character) < 32 for character in title)
+        or ":" in title
+        or "#" in title
+        or title[0] in "-?[]{}&*!|>'\"%@`"
+    ):
+        raise ValueError("document title must be a safe single-line frontmatter scalar")
+    return title
+
+
 def build_document_proposal(
     project_path: Path,
     trigger: str,
@@ -321,7 +357,7 @@ def build_document_proposal(
     ):
         raise ValueError("document suggestion requires a linked Technical Overview retained summary")
 
-    title = str(suggestion.get("title", "")).strip()
+    title = _safe_module_title(suggestion.get("title", ""))
     purpose = str(suggestion.get("purpose", "")).strip()
     conclusion = _render_content(suggestion.get("module_conclusion", {}))
     body = _render_content(suggestion.get("module_body", {}))
@@ -374,6 +410,7 @@ def build_document_proposal(
         "trigger": trigger,
         "source_events": current_sources,
         "purpose": purpose,
+        "title": title,
         "retained_summary": retained,
         "module_id": module_id,
         "filename": filename,
@@ -381,6 +418,7 @@ def build_document_proposal(
         "target_path": f"{project_id}/docs/{filename}",
         "preview": preview,
         "preview_hash": _content_hash(preview),
+        "module_updated": updated,
         "linked_section_proposal_id": linked_section_bundle["proposal_id"],
         "linked_technical_overview_hash": technical_change["target_section_hash"],
         "created_at": created_at,
@@ -535,17 +573,40 @@ def apply_section_bundle(
 
 
 def _validate_module_contract(preview: str, proposal: dict) -> None:
-    metadata = parse_frontmatter(preview)
+    if not preview.startswith("---\n"):
+        raise ValueError("module preview has invalid frontmatter")
+    header, separator, _body = preview[4:].partition("\n---\n")
+    if not separator:
+        raise ValueError("module preview has invalid frontmatter")
+    entries: list[tuple[str, str]] = []
+    for line in header.splitlines():
+        key, marker, value = line.partition(":")
+        if not marker or key != key.strip() or not key:
+            raise ValueError("module preview has invalid frontmatter")
+        entries.append((key, value.strip()))
+    expected_keys = (
+        "doc_kind",
+        "project_id",
+        "module_id",
+        "title",
+        "order",
+        "include_in_compendium",
+        "updated",
+    )
+    if tuple(key for key, _value in entries) != expected_keys:
+        raise ValueError("module preview frontmatter keys do not match the module contract")
+    metadata = dict(entries)
     required = {
         "doc_kind": "project_module",
         "project_id": str(proposal["project_id"]),
         "module_id": str(proposal["module_id"]),
+        "title": _safe_module_title(proposal.get("title", "")),
         "order": str(proposal["order"]),
         "include_in_compendium": "true",
+        "updated": str(proposal.get("module_updated", "")),
     }
-    for key, value in required.items():
-        if metadata.get(key) != value:
-            raise ValueError(f"module preview has invalid {key}")
+    if metadata != required:
+        raise ValueError("module preview frontmatter values do not match the module contract")
     conclusion = re.search(
         r"<!-- section:module-conclusion -->\s*(.*?)\s*## .*?<!-- section:module-body -->",
         preview,

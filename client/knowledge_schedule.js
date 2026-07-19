@@ -39,10 +39,15 @@ function dueRuns(now, startedAt, schedule) {
   const config = schedule || {};
   const due = [];
   const today = localDateString(now);
+  const todayStart = localMidnight(now);
+  const tomorrowStart = addDays(todayStart, 1);
   const dailyAt = scheduledAt(now, config.dailyTime || '23:30');
   if (config.dailyEnabled && dailyAt && now >= dailyAt
       && config.lastDailySuccessDate !== today) {
-    due.push({ cadence: 'daily', scheduleKey: today, dateFrom: today, dateTo: today });
+    due.push({
+      cadence: 'daily', scheduleKey: today, dateFrom: today, dateTo: today,
+      rangeStartUtc: todayStart.toISOString(), rangeEndUtc: tomorrowStart.toISOString(),
+    });
   }
 
   const weekStart = mondayOfLocalWeek(now);
@@ -56,6 +61,7 @@ function dueRuns(now, startedAt, schedule) {
     due.push({
       cadence: 'weekly', scheduleKey: weekKey,
       dateFrom: localDateString(weekStart), dateTo: localDateString(weekEnd),
+      rangeStartUtc: weekStart.toISOString(), rangeEndUtc: addDays(weekEnd, 1).toISOString(),
     });
   }
   return due;

@@ -120,6 +120,18 @@ class ProjectSynthesizerRunnerTest(unittest.TestCase):
                 with self.assertRaises(OpencodeRunnerError):
                     parse_synthesis_output(raw)
 
+    def test_parser_rejects_multiline_document_title(self):
+        raw = (
+            '{"changes":[],"document_suggestion":{"purpose":"p",'
+            '"title":"Architecture\\nextra_control: agent-owned",'
+            '"retained_summary":"summary",'
+            '"module_conclusion":{"paragraphs":["c"],"bullets":[]},'
+            '"module_body":{"paragraphs":["b"],"bullets":[]}}}'
+        )
+
+        with self.assertRaises(OpencodeRunnerError):
+            parse_synthesis_output(raw)
+
 
 _EXAMPLE_NDJSON = """\
 {"type":"step_start","part":{"type":"step-start"}}
