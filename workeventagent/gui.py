@@ -63,6 +63,7 @@ from workeventagent.models import ArchiveProposal, TargetRef, TimelineEvent
 from workeventagent.opencode_runner import (
     OpencodeRunnerError,
     parse_archivist_output,
+    parse_knowledge_impact,
     parse_project_route_output,
     run_archivist,
     run_project_router,
@@ -117,6 +118,7 @@ def _main_impl() -> None:
         "inbox_process": handle_inbox_process,
         "inbox_commit": handle_inbox_commit,
         "inbox_cancel": handle_inbox_cancel,
+        "knowledge_recover": handle_knowledge_recover,
         "search": handle_search,
         "correct_event": handle_correct_event,
         "correction_recoveries": handle_correction_recoveries,
@@ -168,6 +170,7 @@ def handle_propose(request: dict) -> dict:
     event_id = make_event_id(now, tentative_task_id, existing_event_ids)
 
     proposal = parse_archivist_output(raw, event_id)
+    knowledge_impact = parse_knowledge_impact(raw)
 
     # Anti-collision for new_task
     if proposal.target.new_task:
@@ -203,6 +206,7 @@ def handle_propose(request: dict) -> dict:
             },
             "attachment_paths": list(proposal.attachment_paths),
         },
+        "knowledge_impact": knowledge_impact,
         "low_confidence": proposal.confidence < 0.7,
     }
 
@@ -267,14 +271,51 @@ def handle_commit(request: dict) -> dict:
     db_path = Path(request["db_path"])
     pending_attachments = request.get("pending_attachments", [])
 
-    # 1. Copy attachments from temp to project attachments dir
-    archived_attachments: list[str] = []
     event = proposal_data["event"]
     task_id = event["task_id"]
     event_id = event["event_id"]
     event_ts = _event_id_timestamp(event_id)
-
     project_dir = project_path.parent
+    doc_text = project_path.read_text(encoding="utf-8")
+
+    # Event identity is the durable commit key.  Check it before attachments or
+    # Markdown writes so a crash/retry cannot duplicate either side effect.
+    existing = next(
+        (item for item in parse_timeline_events(doc_text) if item.get("event_id") == event_id),
+        None,
+    )
+    if existing is not None:
+        expected = {
+            "task_id": event.get("task_id", ""),
+            "input": event.get("input_text", ""),
+            "summary": event.get("summary", ""),
+            "status": event.get("status", "in_progress"),
+            "next_action": event.get("next_action", ""),
+        }
+        comparable = {
+            key: str(existing.get(key, "")).strip()
+            for key in ("task_id", "input", "summary", "status", "next_action")
+        }
+        expected = {key: str(value).strip() for key, value in expected.items()}
+        if comparable != expected:
+            return {
+                "ok": False,
+                "kind": "event_id_conflict",
+                "error": f"event_id already exists with different content: {event_id}",
+                "event_id": event_id,
+            }
+        return {
+            "ok": True,
+            "written_path": str(project_path),
+            "archived_attachments": [],
+            "task_id": task_id,
+            "event_id": event_id,
+            "event": {"event_id": event_id},
+            "idempotent": True,
+        }
+
+    # 1. Copy attachments from temp to project attachments dir
+    archived_attachments: list[str] = []
 
     if pending_attachments:
         dest_dir = project_dir / "attachments" / task_id
@@ -300,7 +341,6 @@ def handle_commit(request: dict) -> dict:
     proposal = _dict_to_proposal(proposal_data)
 
     # 4. Write Markdown
-    doc_text = project_path.read_text(encoding="utf-8")
     now = datetime.now(timezone.utc)
     now_str = now.strftime("%Y-%m-%d")
 
@@ -325,6 +365,9 @@ def handle_commit(request: dict) -> dict:
         "written_path": str(project_path),
         "archived_attachments": archived_attachments,
         "task_id": task_id,
+        "event_id": event_id,
+        "event": {"event_id": event_id},
+        "idempotent": False,
     }
 
 
@@ -855,6 +898,10 @@ def handle_inbox_process(request: dict) -> dict:
             "state": "needs_confirmation",
             "proposal": result.get("proposal", result),
             "selected_project": result.get("selected_project"),
+            "knowledge_impact": result.get(
+                "knowledge_impact",
+                {"level": "ordinary", "dimensions": [], "reason": "Impact metadata unavailable."},
+            ),
         }
         if result.get("low_confidence"):
             patch["low_confidence"] = True
@@ -890,6 +937,26 @@ def handle_inbox_commit(request: dict) -> dict:
     if not project_path:
         return {"ok": False, "kind": "no_project", "error": "card has no selected project"}
 
+    event_id = str(proposal.get("event", {}).get("event_id", ""))
+    project_id = str(proposal.get("target", {}).get("project_id", ""))
+    impact = card.get("knowledge_impact", {})
+    knowledge_job = None
+    if impact.get("level") == "high":
+        from workeventagent.knowledge_store import enqueue_job
+
+        knowledge_job = enqueue_job(
+            workspace,
+            {
+                "idempotency_key": f"high-impact:{project_id}:{event_id}",
+                "state": "awaiting_source",
+                "project_id": project_id,
+                "project_path": project_path,
+                "trigger": "high_impact",
+                "source_event_ids": [event_id],
+                "capture_id": capture_id,
+            },
+        )
+
     try:
         result = handle_commit({
             "proposal": proposal,
@@ -902,18 +969,91 @@ def handle_inbox_commit(request: dict) -> dict:
         return {"ok": False, "kind": "commit_error", "error": str(exc)}
 
     if result.get("ok"):
-        archived_event_id = ""
-        # Extract event_id from commit result if available
-        if isinstance(result.get("event"), dict):
-            archived_event_id = result["event"].get("event_id", "")
-        archive_capture(workspace, capture_id, {
+        archived_event_id = str(result.get("event_id", event_id))
+        if knowledge_job is not None:
+            from workeventagent.knowledge_store import get_job, transition_job
+
+            current = get_job(workspace, knowledge_job["job_id"])
+            source_ids = {
+                item.get("event_id")
+                for item in parse_timeline_events(Path(project_path).read_text(encoding="utf-8"))
+            }
+            if archived_event_id not in source_ids:
+                update_capture(
+                    workspace,
+                    capture_id,
+                    {"state": "error", "error": "committed event is not readable from Timeline"},
+                )
+                return {
+                    "ok": False,
+                    "kind": "source_not_visible",
+                    "error": "committed event is not readable from Timeline",
+                    "knowledge_job_id": current["job_id"],
+                }
+            if current["state"] == "awaiting_source":
+                current = transition_job(
+                    workspace,
+                    current["job_id"],
+                    current["version"],
+                    {"awaiting_source"},
+                    "queued",
+                )
+            knowledge_job = current
+        archived = archive_capture(workspace, capture_id, {
             "project_path": project_path,
             "event_id": archived_event_id,
         })
-        return {"ok": True, "card": list_captures(workspace)[-1] if list_captures(workspace) else {}}
+        response = {"ok": True, "card": archived, "event_id": archived_event_id}
+        if knowledge_job is not None:
+            response["knowledge_job_id"] = knowledge_job["job_id"]
+        return response
     else:
         update_capture(workspace, capture_id, {"state": "error", "error": result.get("error", "commit failed")})
         return {"ok": False, "kind": result.get("kind", "commit_error"), "error": result.get("error", "commit failed")}
+
+
+def handle_knowledge_recover(request: dict) -> dict:
+    """Recover interrupted high-impact source commits before worker startup."""
+    workspace = Path(request["workspace"])
+    from workeventagent.knowledge_store import list_jobs, recover_jobs
+
+    recovered = recover_jobs(workspace)
+    cards = {card.get("capture_id"): card for card in list_captures(workspace)}
+    archived_ids: list[str] = []
+    for job in list_jobs(workspace):
+        capture_id = str(job.get("capture_id", ""))
+        source_ids = list(job.get("source_event_ids", []))
+        card = cards.get(capture_id)
+        source_exists = False
+        project_path = Path(str(job.get("project_path", "")))
+        if project_path.is_file():
+            source_exists = all(
+                event_id
+                in {
+                    event.get("event_id")
+                    for event in parse_timeline_events(project_path.read_text(encoding="utf-8"))
+                }
+                for event_id in source_ids
+            )
+        if (
+            job.get("state") == "queued"
+            and capture_id
+            and source_ids
+            and source_exists
+            and card is not None
+            and card.get("state") not in {"archived", "canceled"}
+        ):
+            archive_capture(
+                workspace,
+                capture_id,
+                {"project_path": job.get("project_path", ""), "event_id": source_ids[0]},
+            )
+            archived_ids.append(capture_id)
+    return {
+        "ok": True,
+        "recovered_job_ids": [job["job_id"] for job in recovered],
+        "archived_capture_ids": archived_ids,
+    }
 
 
 def _inbox_attachment_paths(workspace: Path, card: dict) -> list[dict]:

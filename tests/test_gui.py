@@ -35,6 +35,8 @@ from workeventagent.gui import (
     handle_search,
 )
 from workeventagent.project_schema import parse_timeline_events
+from workeventagent.inbox_store import list_captures, update_capture
+from workeventagent.knowledge_store import enqueue_job, get_job, job_id_for, list_jobs
 
 from workeventagent.search_store import search_workspace
 from workeventagent.markdown_store import write_project_atomically
@@ -1547,6 +1549,7 @@ class UpdateTaskTest(unittest.TestCase):
             self.assertTrue(result["ok"])
             after = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
             self.assertEqual(after[0]["status"], "done")
+            self.assertEqual(list_jobs(ws), [], "manual task status must not enqueue synthesis")
         finally:
             tmp.cleanup()
 
@@ -2132,6 +2135,207 @@ class InboxHandlerTests(unittest.TestCase):
             self.assertTrue(result["ok"], str(result))
             pending_dir = ws / ".workeventagent" / "pending" / created["card"]["capture_id"]
             self.assertFalse(pending_dir.exists())
+
+
+class PhaseBImpactCommitTest(unittest.TestCase):
+    def _setup_confirmed_card(self, workspace: Path, *, impact_level: str) -> tuple[dict, Path]:
+        initialized = handle_init({
+            "workspace": str(workspace),
+            "title": "Impact Test",
+            "project_id": "impact-test",
+            "items": [{"title": "Item A", "tasks": ["Task 1"]}],
+            "db_path": str(workspace / "index.sqlite"),
+        })
+        project = Path(initialized["project_path"])
+        task_id = handle_tasks({"project_path": str(project)})["items"][0]["tasks"][0]["task_id"]
+        created = handle_inbox_create({"workspace": str(workspace), "text": "scope changed", "attachments": []})
+        proposal = {
+            "target": {
+                "project_id": "impact-test",
+                "item_id": "item-a",
+                "task_id": task_id,
+                "task_title": "",
+                "new_item": False,
+                "new_task": False,
+            },
+            "confidence": 0.96,
+            "reason": "Matched",
+            "event": {
+                "event_id": "20260720-083000000-task-1",
+                "task_id": task_id,
+                "input_text": "Project scope changed.",
+                "summary": "Scope now includes recovery.",
+                "status": "in_progress",
+                "next_action": "Implement recovery.",
+            },
+            "attachment_paths": [],
+        }
+        impact = {
+            "level": impact_level,
+            "dimensions": ["scope"] if impact_level == "high" else [],
+            "reason": "Project scope changed." if impact_level == "high" else "Task evidence only.",
+        }
+        card = update_capture(
+            workspace,
+            created["card"]["capture_id"],
+            {
+                "state": "needs_confirmation",
+                "proposal": proposal,
+                "selected_project": {"project_id": "impact-test", "path": str(project)},
+                "knowledge_impact": impact,
+            },
+        )
+        return card, project
+
+    @patch("workeventagent.gui.run_archivist")
+    def test_propose_exposes_high_impact_before_confirmation(self, run_archivist):
+        run_archivist.return_value = """{
+          "target": {"project_id": "multimodal-labeling", "item_id": "kv-cache-few-shot", "task_id": "kv-cache-blockers"},
+          "confidence": 0.91,
+          "reason": "Matched.",
+          "event": {"task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
+          "knowledge_impact": {"level": "high", "dimensions": ["architecture"], "reason": "Architecture changed."}
+        }"""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            project.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+            result = handle_propose({"text": "architecture changed", "project_path": str(project)})
+
+        self.assertEqual(result["knowledge_impact"]["level"], "high")
+        self.assertEqual(result["knowledge_impact"]["dimensions"], ["architecture"])
+
+    def test_ordinary_capture_commit_creates_no_knowledge_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, _project = self._setup_confirmed_card(workspace, impact_level="ordinary")
+
+            result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            self.assertTrue(result["ok"], str(result))
+            self.assertEqual(list_jobs(workspace), [])
+            self.assertNotIn("knowledge_job_id", result)
+
+    def test_high_impact_job_exists_before_project_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, _project = self._setup_confirmed_card(workspace, impact_level="high")
+            event_id = card["proposal"]["event"]["event_id"]
+            expected_job_id = job_id_for(f"high-impact:impact-test:{event_id}")
+
+            def stop_after_check(_request):
+                self.assertEqual(get_job(workspace, expected_job_id)["state"], "awaiting_source")
+                raise RuntimeError("stop after order assertion")
+
+            with patch("workeventagent.gui.handle_commit", side_effect=stop_after_check):
+                result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(get_job(workspace, expected_job_id)["state"], "awaiting_source")
+
+    def test_high_impact_job_is_queued_only_after_source_event_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, project = self._setup_confirmed_card(workspace, impact_level="high")
+
+            result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            event_id = card["proposal"]["event"]["event_id"]
+            job_id = job_id_for(f"high-impact:impact-test:{event_id}")
+            self.assertTrue(result["ok"], str(result))
+            self.assertEqual(result["knowledge_job_id"], job_id)
+            self.assertEqual(get_job(workspace, job_id)["state"], "queued")
+            self.assertIn(event_id, {event["event_id"] for event in parse_timeline_events(project.read_text(encoding="utf-8"))})
+
+    def test_failed_project_commit_leaves_visible_recoverable_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, _project = self._setup_confirmed_card(workspace, impact_level="high")
+            event_id = card["proposal"]["event"]["event_id"]
+            job_id = job_id_for(f"high-impact:impact-test:{event_id}")
+
+            with patch("workeventagent.gui.handle_commit", side_effect=OSError("disk full")):
+                result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(get_job(workspace, job_id)["state"], "awaiting_source")
+
+    def test_commit_returns_and_inbox_archives_real_event_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, _project = self._setup_confirmed_card(workspace, impact_level="ordinary")
+            event_id = card["proposal"]["event"]["event_id"]
+
+            result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            self.assertTrue(result["ok"], str(result))
+            archived = next(item for item in list_captures(workspace) if item["capture_id"] == card["capture_id"])
+            self.assertEqual(archived["event_id"], event_id)
+
+    def test_retry_same_event_id_and_content_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            db = Path(tmp) / "index.sqlite"
+            project.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+            proposal = _make_mock_proposal_data()
+            first = handle_commit({"proposal": proposal, "project_path": str(project), "db_path": str(db)})
+            after_first = project.read_text(encoding="utf-8")
+
+            second = handle_commit({"proposal": proposal, "project_path": str(project), "db_path": str(db)})
+
+            self.assertTrue(first["ok"] and second["ok"])
+            self.assertTrue(second["idempotent"])
+            self.assertEqual(project.read_text(encoding="utf-8"), after_first)
+            self.assertEqual(after_first.count(f"<!-- event:{proposal['event']['event_id']} -->"), 1)
+
+    def test_retry_same_event_id_with_different_content_is_hard_conflict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            db = Path(tmp) / "index.sqlite"
+            project.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+            proposal = _make_mock_proposal_data()
+            handle_commit({"proposal": proposal, "project_path": str(project), "db_path": str(db)})
+            before = project.read_text(encoding="utf-8")
+            conflicting = _make_mock_proposal_data({"event": {"summary": "Different meaning."}})
+
+            result = handle_commit({"proposal": conflicting, "project_path": str(project), "db_path": str(db)})
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["kind"], "event_id_conflict")
+            self.assertEqual(project.read_text(encoding="utf-8"), before)
+
+    def test_startup_recovers_event_written_before_inbox_archive_and_job_promote(self):
+        from workeventagent.gui import handle_knowledge_recover
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, project = self._setup_confirmed_card(workspace, impact_level="high")
+            event_id = card["proposal"]["event"]["event_id"]
+            job = enqueue_job(
+                workspace,
+                {
+                    "idempotency_key": f"high-impact:impact-test:{event_id}",
+                    "state": "awaiting_source",
+                    "project_id": "impact-test",
+                    "project_path": str(project),
+                    "trigger": "high_impact",
+                    "source_event_ids": [event_id],
+                    "capture_id": card["capture_id"],
+                },
+            )
+            committed = handle_commit({
+                "proposal": card["proposal"],
+                "project_path": str(project),
+                "db_path": str(workspace / "index.sqlite"),
+            })
+            self.assertTrue(committed["ok"])
+
+            recovered = handle_knowledge_recover({"workspace": str(workspace)})
+
+            self.assertTrue(recovered["ok"])
+            self.assertEqual(get_job(workspace, job["job_id"])["state"], "queued")
+            archived = next(item for item in list_captures(workspace) if item["capture_id"] == card["capture_id"])
+            self.assertEqual(archived["state"], "archived")
+            self.assertEqual(archived["event_id"], event_id)
 
 
 class SearchHandlerTests(unittest.TestCase):

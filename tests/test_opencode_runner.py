@@ -7,11 +7,59 @@ from unittest.mock import patch
 from workeventagent.opencode_runner import (
     OpencodeRunnerError,
     parse_archivist_output,
+    parse_knowledge_impact,
     parse_project_route_output,
     run_archivist,
     run_project_router,
     run_reporter,
 )
+
+
+class KnowledgeImpactParserTest(unittest.TestCase):
+    def test_valid_ordinary_and_high_objects_parse(self):
+        ordinary = parse_knowledge_impact(
+            '{"knowledge_impact":{"level":"ordinary","dimensions":[],"reason":"Task evidence only."}}'
+        )
+        high = parse_knowledge_impact(
+            '{"knowledge_impact":{"level":"high","dimensions":["architecture","risk"],"reason":"Architecture changed."}}'
+        )
+
+        self.assertEqual(ordinary, {"level": "ordinary", "dimensions": [], "reason": "Task evidence only."})
+        self.assertEqual(
+            high,
+            {"level": "high", "dimensions": ["architecture", "risk"], "reason": "Architecture changed."},
+        )
+
+    def test_invalid_or_missing_impact_fails_closed_to_ordinary(self):
+        invalid_values = [
+            "{}",
+            '{"knowledge_impact":{"level":"urgent","dimensions":[],"reason":"x"}}',
+            '{"knowledge_impact":{"level":"high","dimensions":["status"],"reason":"x"}}',
+            '{"knowledge_impact":{"level":"high","dimensions":["goal"],"reason":""}}',
+            '{"knowledge_impact":{"level":"high","dimensions":[],"reason":"Goal changed"}}',
+        ]
+
+        for raw in invalid_values:
+            with self.subTest(raw=raw):
+                result = parse_knowledge_impact(raw)
+                self.assertEqual(result["level"], "ordinary")
+                self.assertEqual(result["dimensions"], [])
+                self.assertTrue(result["reason"])
+
+    def test_agent_owned_ids_are_ignored(self):
+        result = parse_knowledge_impact(
+            '{"knowledge_impact":{"level":"high","dimensions":["scope"],"reason":"Scope changed",'
+            '"source_event_ids":["agent-event"],"job_id":"agent-job"}}'
+        )
+
+        self.assertEqual(set(result), {"level", "dimensions", "reason"})
+
+    def test_done_without_supported_dimension_is_ordinary(self):
+        result = parse_knowledge_impact(
+            '{"event":{"status":"done"},"knowledge_impact":{"level":"high","dimensions":[],"reason":"Task done"}}'
+        )
+
+        self.assertEqual(result["level"], "ordinary")
 
 
 _EXAMPLE_NDJSON = """\

@@ -151,6 +151,50 @@ def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
     return proposal
 
 
+_KNOWLEDGE_DIMENSIONS = {"goal", "scope", "architecture", "risk", "milestone"}
+
+
+def parse_knowledge_impact(raw: str) -> dict:
+    """Return bounded pre-confirmation impact metadata, failing closed.
+
+    Archive parsing must remain available even when the optional impact object is
+    malformed.  The returned object deliberately drops every field not owned by
+    this adapter, including any agent-supplied IDs.
+    """
+    fallback = {
+        "level": "ordinary",
+        "dimensions": [],
+        "reason": "Impact metadata was missing or invalid; treated as ordinary.",
+    }
+    try:
+        data = json.loads(_extract_json_text(raw))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return fallback
+    impact = data.get("knowledge_impact")
+    if not isinstance(impact, dict):
+        return fallback
+    level = impact.get("level")
+    dimensions = impact.get("dimensions")
+    reason = impact.get("reason")
+    if level not in {"ordinary", "high"}:
+        return fallback
+    if not isinstance(dimensions, list) or any(
+        not isinstance(value, str) or value not in _KNOWLEDGE_DIMENSIONS
+        for value in dimensions
+    ):
+        return fallback
+    if not isinstance(reason, str):
+        return fallback
+    clean_reason = reason.strip()
+    if level == "high" and (not dimensions or not clean_reason):
+        return fallback
+    return {
+        "level": level,
+        "dimensions": list(dict.fromkeys(dimensions)),
+        "reason": clean_reason,
+    }
+
+
 def _normalize_status(raw_status: object) -> str:
     status = str(raw_status).strip().lower().replace("-", " ").replace("_", " ")
     done_aliases = {
