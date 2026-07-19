@@ -79,10 +79,9 @@ Schedule-run states:
 
 ```text
 enqueuing -> processing -> completed
-                       \-> failed
 ```
 
-A schedule-run manifest is written before its first child job. It snapshots every schema-v2 project ID/path and the deterministic child-job ID expected for that cadence key. A restart fills in missing children from the manifest before it evaluates run completion. The daily/weekly success marker can advance only from a `completed` manifest, never by counting whatever child jobs happen to exist after a partial enqueue.
+A schedule-run manifest is written before its first child job. It snapshots every schema-v2 project ID/path and the deterministic child-job ID expected for that cadence key. A restart fills in missing children from the manifest before it evaluates run completion. A failed child leaves the run in `processing`; explicit child retry may later satisfy that slot. The daily/weekly success marker can advance only from a `completed` manifest, never by counting whatever child jobs happen to exist after a partial enqueue.
 
 Section proposal bundle shape:
 
@@ -292,6 +291,7 @@ def test_atomic_replace_failure_preserves_previous_entity(tmp_path, monkeypatch)
 def test_schedule_manifest_snapshots_all_v2_projects_before_first_child(tmp_path): ...
 def test_schedule_recovery_fills_children_after_crash_on_first_enqueue(tmp_path): ...
 def test_schedule_run_with_one_failed_child_never_completes(tmp_path): ...
+def test_failed_child_retry_reopens_run_and_advances_marker_only_after_completion(tmp_path): ...
 ```
 
 Use a temporary schema-v2 project with one Timeline event for recovery tests.
@@ -321,8 +321,9 @@ Schedule-run rules:
 - `create_schedule_run` receives a wrapper-generated snapshot of all schema-v2 projects before any child job is written.
 - The manifest stores every expected deterministic child ID, not only children already enqueued.
 - `ensure_schedule_children` is idempotent and creates any child missing after a crash.
-- A child in `failed`, `awaiting_source`, `queued`, or `processing` prevents run completion.
+- A child in `failed`, `awaiting_source`, `queued`, or `processing` prevents run completion but does not move the run out of `processing`.
 - Only `completed`, `skipped_no_evidence`, and `skipped_no_change` satisfy a child slot.
+- `evaluate_schedule_run` always recomputes from every expected child ID in the manifest. After a failed child is explicitly retried, the same run can become `completed` once all child slots are terminal-success/no-op.
 - The manifest itself is versioned and atomic; config success markers are never written by this module.
 
 - [ ] **Step 4: Run focused tests**
@@ -765,6 +766,7 @@ Use Node from pytest to prove:
 - a two-project run writes a manifest for both projects before the first child enqueue;
 - crashing after the first child enqueue is recovered by creating the missing second child;
 - one failed child keeps the manifest and config marker incomplete.
+- retrying that child to terminal success allows the same manifest—and only then its config marker—to complete.
 
 - [ ] **Step 2: Write failing IPC/worker static guards**
 
