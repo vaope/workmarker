@@ -22,6 +22,16 @@ const DEFAULTS = {
     lastWeeklyRunKey: '',
     lastRunStatus: '',
   },
+  synthesisSchedule: {
+    dailyEnabled: true,
+    dailyTime: '23:30',
+    weeklyEnabled: true,
+    weeklyDay: 5,
+    weeklyTime: '18:00',
+    lastDailySuccessDate: '',
+    lastWeeklySuccessKey: '',
+    lastRunStatus: '',
+  },
 };
 
 function loadConfig() {

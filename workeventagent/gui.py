@@ -1176,6 +1176,7 @@ def handle_knowledge_enqueue_schedule(request: dict) -> dict:
 
     run = knowledge_store.create_schedule_run(workspace, cadence, schedule_key, projects)
     run = knowledge_store.ensure_schedule_children(workspace, run["run_id"])
+    run = knowledge_store.evaluate_schedule_run(workspace, run["run_id"])
     return {"ok": True, "run": run}
 
 
@@ -1191,6 +1192,17 @@ def _knowledge_prompt(job: dict, source_events: list[dict]) -> str:
         )
     lines.append("Return the bounded JSON contract only.")
     return "\n".join(lines)
+
+
+def _evaluate_job_schedule(workspace: Path, response: dict) -> dict:
+    job = response.get("job")
+    run_id = job.get("schedule_run_id") if isinstance(job, dict) else None
+    if run_id:
+        import workeventagent.knowledge_store as knowledge_store
+
+        response = dict(response)
+        response["schedule_run"] = knowledge_store.evaluate_schedule_run(workspace, str(run_id))
+    return response
 
 
 def handle_knowledge_process_job(request: dict) -> dict:
@@ -1226,7 +1238,9 @@ def handle_knowledge_process_job(request: dict) -> dict:
                 {"processing"},
                 "skipped_no_evidence",
             )
-            return {"ok": True, "job": finished, "proposal_ids": []}
+            return _evaluate_job_schedule(
+                workspace, {"ok": True, "job": finished, "proposal_ids": []}
+            )
 
         raw = run_project_synthesizer(
             _knowledge_prompt(job, source_events),
@@ -1249,7 +1263,9 @@ def handle_knowledge_process_job(request: dict) -> dict:
                 {"processing"},
                 "skipped_no_change",
             )
-            return {"ok": True, "job": finished, "proposal_ids": []}
+            return _evaluate_job_schedule(
+                workspace, {"ok": True, "job": finished, "proposal_ids": []}
+            )
         document = None
         if parsed.get("document_suggestion") is not None:
             document = build_document_proposal(
@@ -1273,7 +1289,9 @@ def handle_knowledge_process_job(request: dict) -> dict:
             "completed",
             {"proposal_ids": proposal_ids},
         )
-        return {"ok": True, "job": finished, "proposal_ids": proposal_ids}
+        return _evaluate_job_schedule(
+            workspace, {"ok": True, "job": finished, "proposal_ids": proposal_ids}
+        )
     except Exception as exc:
         current = get_job(workspace, job_id)
         if current["state"] == "processing":
@@ -1285,7 +1303,10 @@ def handle_knowledge_process_job(request: dict) -> dict:
                 "failed",
                 {"last_error": str(exc)},
             )
-        return {"ok": False, "kind": "processing_failed", "error": str(exc), "job": current}
+        return _evaluate_job_schedule(
+            workspace,
+            {"ok": False, "kind": "processing_failed", "error": str(exc), "job": current},
+        )
 
 
 def handle_knowledge_state(request: dict) -> dict:

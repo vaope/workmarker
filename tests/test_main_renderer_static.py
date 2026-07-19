@@ -77,3 +77,56 @@ def test_reviewed_section_editors_send_base_hashes() -> None:
     assert "baseMetadataHash" in source
     assert "stale_section" in source
     assert "stale_metadata" in source
+
+
+def test_knowledge_preload_exposes_only_typed_operations() -> None:
+    source = Path("client/preload.js").read_text(encoding="utf-8")
+    expected = {
+        "getKnowledgeState": "wea:getKnowledgeState",
+        "enqueueKnowledge": "wea:enqueueKnowledge",
+        "processKnowledgeJob": "wea:processKnowledgeJob",
+        "retryKnowledgeJob": "wea:retryKnowledgeJob",
+        "reviseKnowledgeProposal": "wea:reviseKnowledgeProposal",
+        "rejectKnowledgeProposal": "wea:rejectKnowledgeProposal",
+        "applyKnowledgeProposal": "wea:applyKnowledgeProposal",
+        "applyKnowledgeDocument": "wea:applyKnowledgeDocument",
+        "onKnowledgeUpdated": "wea:knowledge-updated",
+    }
+    for method, channel in expected.items():
+        assert method in source
+        assert channel in source
+    assert "writeMarkdown" not in source
+    assert "writeProjectFile" not in source
+
+
+def test_main_process_has_serial_recoverable_knowledge_worker() -> None:
+    source = Path("client/main.js").read_text(encoding="utf-8")
+
+    assert "let knowledgeWorkerChain = Promise.resolve()" in source
+    assert "function enqueueKnowledgeJob" in source
+    assert "knowledge_process_job" in source
+    assert "wea:knowledge-updated" in source
+    commit = source[source.index("wea:inboxCommit"):source.index("wea:inboxCancel")]
+    assert "knowledge_job_id" in commit
+    assert "enqueueKnowledgeJob" in commit
+    recovery = source[source.index("async function recoverKnowledgeWork"):
+                      source.index("async function runScheduledKnowledge")]
+    assert recovery.index("knowledge_recover") < recovery.index("knowledge_state")
+    assert "enqueueKnowledgeJob" in recovery
+
+
+def test_main_process_maps_typed_knowledge_ipc_to_bounded_backend_commands() -> None:
+    source = Path("client/main.js").read_text(encoding="utf-8")
+    expected = {
+        "wea:getKnowledgeState": "knowledge_state",
+        "wea:enqueueKnowledge": "knowledge_enqueue",
+        "wea:processKnowledgeJob": "knowledge_process_job",
+        "wea:retryKnowledgeJob": "knowledge_retry_job",
+        "wea:reviseKnowledgeProposal": "knowledge_revise_proposal",
+        "wea:rejectKnowledgeProposal": "knowledge_reject_proposal",
+        "wea:applyKnowledgeProposal": "knowledge_apply_proposal",
+        "wea:applyKnowledgeDocument": "knowledge_apply_document",
+    }
+    for channel, command in expected.items():
+        assert f"ipcMain.handle('{channel}'" in source
+        assert f"'{command}'" in source

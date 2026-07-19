@@ -380,6 +380,6 @@ def evaluate_schedule_run(workspace: Path, run_id: str) -> dict:
     if run["state"] == "completed":
         return run
     children = [get_job(workspace, child["job_id"]) for child in run.get("expected_children", [])]
-    if children and all(child.get("state") in _SUCCESS_STATES for child in children):
+    if all(child.get("state") in _SUCCESS_STATES for child in children):
         return _write_run(workspace, run, state="completed")
     return run

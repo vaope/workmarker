@@ -11,6 +11,7 @@ const os = require('os');
 const { callBackend } = require('./python_bridge');
 const { loadConfig, saveConfig, dbPathFor } = require('./config');
 const { createHotkeyManager } = require('./hotkey_manager');
+const KnowledgeSchedule = require('./knowledge_schedule');
 
 let mainWindow = null;
 let captureWindow = null;
@@ -19,6 +20,107 @@ let isQuitting = false;
 
 const PENDING_DIR = path.join(os.tmpdir(), 'workeventagent', 'pending');
 const cfg = () => loadConfig();
+
+let knowledgeWorkerChain = Promise.resolve();
+const activeKnowledgeJobs = new Set();
+
+function emitKnowledgeUpdated(payload) {
+  if (mainWindow) mainWindow.webContents.send('wea:knowledge-updated', payload || {});
+}
+
+function markKnowledgeRunSuccessful(run) {
+  if (!run || run.state !== 'completed') return;
+  const current = cfg();
+  const schedule = KnowledgeSchedule.markSuccessful(current.synthesisSchedule || {}, {
+    cadence: run.cadence,
+    scheduleKey: run.schedule_key,
+    state: run.state,
+  });
+  saveConfig({ synthesisSchedule: schedule });
+}
+
+async function processKnowledgeJobNow(jobId) {
+  const c = cfg();
+  if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
+  const result = await callBackend('knowledge_process_job', {
+    workspace: c.workspace,
+    job_id: jobId,
+    opencode_model: c.opencodeModel || '',
+  }, c.pythonCmd);
+  if (result && result.schedule_run) markKnowledgeRunSuccessful(result.schedule_run);
+  emitKnowledgeUpdated({ kind: 'job_transition', job_id: jobId, result });
+  return result;
+}
+
+function enqueueKnowledgeJob(jobId) {
+  if (!jobId) return Promise.resolve({ ok: false, kind: 'invalid_job' });
+  if (activeKnowledgeJobs.has(jobId)) return knowledgeWorkerChain;
+  activeKnowledgeJobs.add(jobId);
+  emitKnowledgeUpdated({ kind: 'job_queued', job_id: jobId });
+  const work = async () => {
+    try {
+      return await processKnowledgeJobNow(jobId);
+    } catch (error) {
+      const result = { ok: false, kind: 'worker_error', error: String(error) };
+      console.error('knowledge worker failed', error);
+      emitKnowledgeUpdated({ kind: 'job_error', job_id: jobId, result });
+      return result;
+    } finally {
+      activeKnowledgeJobs.delete(jobId);
+    }
+  };
+  const result = knowledgeWorkerChain.then(work, work);
+  knowledgeWorkerChain = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+async function recoverKnowledgeWork() {
+  const c = cfg();
+  if (!c.workspace) return { ok: false, kind: 'no_workspace' };
+  const recovered = await callBackend('knowledge_recover', { workspace: c.workspace }, c.pythonCmd);
+  const state = await callBackend('knowledge_state', { workspace: c.workspace }, c.pythonCmd);
+  emitKnowledgeUpdated({ kind: 'recovered', recovered, state });
+  if (state && state.ok) {
+    for (const job of state.jobs || []) {
+      if (job.state === 'queued') enqueueKnowledgeJob(job.job_id);
+    }
+    for (const run of state.runs || []) markKnowledgeRunSuccessful(run);
+  }
+  return { ok: true, recovered, state };
+}
+
+async function runScheduledKnowledge(now = new Date()) {
+  const c = cfg();
+  if (!c.workspace) return [];
+  const schedule = c.synthesisSchedule || {};
+  const due = KnowledgeSchedule.dueRuns(now, knowledgeSchedulerStartedAt || now, schedule);
+  const results = [];
+  for (const planned of due) {
+    const enqueued = await callBackend('knowledge_enqueue_schedule', {
+      workspace: c.workspace,
+      cadence: planned.cadence,
+      schedule_key: planned.scheduleKey,
+      date_from: planned.dateFrom,
+      date_to: planned.dateTo,
+    }, c.pythonCmd);
+    results.push(enqueued);
+    if (!enqueued || !enqueued.ok) {
+      emitKnowledgeUpdated({ kind: 'schedule_error', planned, result: enqueued });
+      continue;
+    }
+    emitKnowledgeUpdated({ kind: 'schedule_enqueued', run: enqueued.run });
+    markKnowledgeRunSuccessful(enqueued.run);
+    const state = await callBackend('knowledge_state', { workspace: c.workspace }, c.pythonCmd);
+    const jobs = new Map((state.jobs || []).map((job) => [job.job_id, job]));
+    const pending = [];
+    for (const child of enqueued.run.expected_children || []) {
+      const job = jobs.get(child.job_id);
+      if (job && job.state === 'queued') pending.push(enqueueKnowledgeJob(job.job_id));
+    }
+    if (pending.length) await Promise.all(pending);
+  }
+  return results;
+}
 
 function ensurePendingDir() {
   try { fs.mkdirSync(PENDING_DIR, { recursive: true }); } catch { /* ignore */ }
@@ -261,6 +363,7 @@ function attachIpc() {
       const payload = { capture_id: captureId };
       if (mainWindow) mainWindow.webContents.send('wea:inbox-updated', payload);
       if (captureWindow) captureWindow.webContents.send('wea:inbox-updated', payload);
+      if (res.knowledge_job_id) enqueueKnowledgeJob(res.knowledge_job_id);
     }
     return res;
   });
@@ -425,6 +528,95 @@ function attachIpc() {
     return { ok: true, reportSchedule: c.reportSchedule || {} };
   });
 
+  // ---- durable knowledge synthesis -------------------------------------
+
+  ipcMain.handle('wea:getKnowledgeState', async (_e, { projectPath }) => {
+    const c = cfg();
+    if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
+    return callBackend('knowledge_state', {
+      workspace: c.workspace,
+      project_path: projectPath || null,
+    }, c.pythonCmd);
+  });
+
+  ipcMain.handle('wea:enqueueKnowledge', async (_e, request) => {
+    const c = cfg();
+    if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
+    const enqueued = await callBackend('knowledge_enqueue', {
+      workspace: c.workspace,
+      trigger: 'directed',
+      project_path: request.projectPath,
+      event_ids: request.eventIds || [],
+    }, c.pythonCmd);
+    if (!enqueued || !enqueued.ok) return enqueued;
+    emitKnowledgeUpdated({ kind: 'job_queued', job_id: enqueued.job.job_id, job: enqueued.job });
+    return enqueueKnowledgeJob(enqueued.job.job_id);
+  });
+
+  ipcMain.handle('wea:processKnowledgeJob', async (_e, { jobId }) =>
+    enqueueKnowledgeJob(jobId));
+
+  ipcMain.handle('wea:retryKnowledgeJob', async (_e, request) => {
+    const c = cfg();
+    if (!c.workspace) return { ok: false, kind: 'no_workspace', error: 'workspace not configured' };
+    const retried = await callBackend('knowledge_retry_job', {
+      workspace: c.workspace,
+      job_id: request.jobId,
+      expected_version: request.expectedVersion,
+    }, c.pythonCmd);
+    emitKnowledgeUpdated({ kind: 'job_retry', result: retried });
+    if (!retried || !retried.ok) return retried;
+    return enqueueKnowledgeJob(retried.job.job_id);
+  });
+
+  ipcMain.handle('wea:reviseKnowledgeProposal', async (_e, request) => {
+    const c = cfg();
+    const result = await callBackend('knowledge_revise_proposal', {
+      workspace: c.workspace,
+      proposal_id: request.proposalId,
+      expected_version: request.expectedVersion,
+      included_change_ids: request.includedChangeIds || [],
+    }, c.pythonCmd);
+    emitKnowledgeUpdated({ kind: 'proposal_revision', result });
+    return result;
+  });
+
+  ipcMain.handle('wea:rejectKnowledgeProposal', async (_e, request) => {
+    const c = cfg();
+    const result = await callBackend('knowledge_reject_proposal', {
+      workspace: c.workspace,
+      proposal_id: request.proposalId,
+      expected_version: request.expectedVersion,
+    }, c.pythonCmd);
+    emitKnowledgeUpdated({ kind: 'proposal_rejection', result });
+    return result;
+  });
+
+  ipcMain.handle('wea:applyKnowledgeProposal', async (_e, request) => {
+    const c = cfg();
+    const result = await callBackend('knowledge_apply_proposal', {
+      workspace: c.workspace,
+      project_path: request.projectPath,
+      db_path: dbPathFor(c.workspace),
+      proposal_id: request.proposalId,
+      expected_version: request.expectedVersion,
+    }, c.pythonCmd);
+    emitKnowledgeUpdated({ kind: 'proposal_apply', result });
+    return result;
+  });
+
+  ipcMain.handle('wea:applyKnowledgeDocument', async (_e, request) => {
+    const c = cfg();
+    const result = await callBackend('knowledge_apply_document', {
+      workspace: c.workspace,
+      project_path: request.projectPath,
+      proposal_id: request.proposalId,
+      expected_version: request.expectedVersion,
+    }, c.pythonCmd);
+    emitKnowledgeUpdated({ kind: 'document_apply', result });
+    return result;
+  });
+
   // ---- project panorama --------------------------------------------------
 
   ipcMain.handle('wea:projectPanorama', async (_e, { projectPath }) =>
@@ -507,6 +699,9 @@ function addDays(d, days) {
 
 let reportScheduleTimer = null;
 let reportSchedulerStartedAt = null;
+let knowledgeScheduleTimer = null;
+let knowledgeSchedulerStartedAt = null;
+let knowledgeScheduleTick = Promise.resolve();
 
 function startReportScheduler() {
   if (reportScheduleTimer) clearInterval(reportScheduleTimer);
@@ -516,6 +711,22 @@ function startReportScheduler() {
       console.error('scheduled report failed', err);
     });
   }, 60 * 1000);
+}
+
+function startKnowledgeScheduler() {
+  if (knowledgeScheduleTimer) clearInterval(knowledgeScheduleTimer);
+  knowledgeSchedulerStartedAt = new Date();
+  const tick = () => {
+    knowledgeScheduleTick = knowledgeScheduleTick
+      .then(() => runScheduledKnowledge(new Date()))
+      .catch((error) => {
+        console.error('scheduled knowledge synthesis failed', error);
+        emitKnowledgeUpdated({ kind: 'schedule_error', error: String(error) });
+      });
+    return knowledgeScheduleTick;
+  };
+  tick();
+  knowledgeScheduleTimer = setInterval(tick, 60 * 1000);
 }
 
 function scheduledTimeForLocalDate(date, hhmm) {
@@ -579,15 +790,21 @@ if (!gotLock) {
     toggleMainWindow();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     ensurePendingDir();
     attachIpc();
+    try {
+      await recoverKnowledgeWork();
+    } catch (error) {
+      console.error('knowledge recovery failed', error);
+    }
     createMainWindow();
     createCaptureWindow();
     setupTray();
     const config = cfg();
     startupHotkeyRegistration = hotkeyManager.registerStartupPair({ capture: config.hotkey, main: config.mainHotkey });
     startReportScheduler();
+    startKnowledgeScheduler();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
