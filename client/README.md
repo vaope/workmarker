@@ -2,7 +2,7 @@
 
 WorkEventAgent 的桌面客户端，在已验证的 Python 归档核心外包一层桌面壳。
 
-- 归档核心：`../workeventagent/`（Python，121 tests 全绿）
+- 归档核心：`../workeventagent/`（Python，343 tests + 19 subtests 全绿）
 - LLM 入口：opencode（唯一）
 - 真相源：项目 Markdown；索引：SQLite；附件：`<workspace>/attachments/`
 
@@ -66,6 +66,15 @@ ls node_modules/electron/dist/electron.exe   # 应为 ~188MB
 - **v1→v2 迁移**：旧项目可预览 diff → 确认迁移，自动写 `.workeventagent/backups/<project_id>/<ts>.md` 备份，原子替换，读回校验
 - **不变量**：Timeline 仍是报告/搜索/纠错/索引重建的证据源；Work Map 保持 F004 交互密度；新项目默认 v2，旧项目不强制迁移
 
+## 项目知识综合（F007 Phase B）
+
+- **可信触发**：普通捕获只归档事实；高影响捕获在事实写入前持久化任务，归档成功后再进入综合队列；每日、每周和定向综合都使用可恢复的持久任务。
+- **统一审核入口**：收件箱同时展示捕获卡与独立持久化的知识提案，包含来源事件、影响维度、before/after 与 diff。
+- **整包确认**：多区块提案确认后全有或全无地原子写入；任一来源事件或 section hash 过期都会拒绝整包，不自动 rebase。
+- **可选模块文档**：由 wrapper 生成稳定 ID、文件名与顺序，必须单独确认，且主文档保留摘要后才能创建。
+- **周期综合**：设置中可配置每日/每周综合；schedule run 以完整项目清单为边界，失败 child 重试成功后才推进周期成功标记。
+- **无隐式写入**：浏览、搜索、生成提案和状态恢复都不会自动应用项目知识；只有用户确认会写入。
+
 ## Reports
 
 The Reports tab can generate and save Markdown reports under `<workspace>/reports/`.
@@ -83,10 +92,12 @@ Manual reports support explicit `date_from` and `date_to` values.
 
 ## 已验证
 
-- 180 Python tests 全绿（含 backend 命令 + registry + timeline 解析 + 报告生成 + 本地时间过滤 + Work Map renderer + 捕获路径）
+- 343 Python tests + 19 subtests 全绿（含 Python bridge 模块入口、知识账本、崩溃恢复、周期 manifest、整包原子应用、可选模块治理与 renderer）
 - 真实 opencode 端到端归档闭环（init → propose → commit → timeline，Markdown + SQLite 真实写入）
-- electron v33 启动 smoke test 无崩溃（主进程加载窗口 + 托盘 + 全局热键）
+- opencode 1.18.1 的 `workevent-synthesizer` 真实契约 smoke：只读输入、无变化时返回有界 JSON，agent 不拥有项目/提案/来源/hash 身份字段
+- Electron v33 在隔离 workspace 和 1040×700 窗口下完成 Phase B 12 项程序化验收：事件选择、统一审核、证据/diff、HTML 转义、整包确认、影响 badge、滚动/溢出、搜索定向入口、周期设置和无自动应用全部通过
+- 11 个客户端 JavaScript 文件全部通过 `node --check`
 
-## 待真机验证（无头环境无法覆盖）
+## 仍需人工体验验证
 
-GUI 视觉渲染与交互（双栏布局、确认卡片、粘贴缩略图、浮窗定位、热键实际唤起）需在有显示器的环境实跑确认。
+程序化 Electron 验收已经覆盖核心布局和交互可达性；仍需人工体验鼠标/触控板手感、粘贴缩略图、浮窗定位、真实全局热键冲突与多显示器行为。

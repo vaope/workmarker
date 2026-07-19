@@ -2675,6 +2675,7 @@ class PhaseBKnowledgeHandlersTest(unittest.TestCase):
                 "workspace": str(workspace), "job_id": enqueued["job"]["job_id"]
             })
             proposal = get_proposal(workspace, processed["proposal_ids"][0])
+            job_ids_before_apply = [job["job_id"] for job in list_jobs(workspace)]
 
             result = gui_module.handle_knowledge_apply_proposal({
                 "workspace": str(workspace), "project_path": str(project),
@@ -2684,6 +2685,11 @@ class PhaseBKnowledgeHandlersTest(unittest.TestCase):
 
             self.assertTrue(result["ok"], str(result))
             self.assertEqual(get_proposal(workspace, proposal["proposal_id"])["state"], "applied")
+            self.assertEqual(
+                [job["job_id"] for job in list_jobs(workspace)],
+                job_ids_before_apply,
+                "applying synthesis must not trigger another synthesis job",
+            )
 
     @patch("workeventagent.gui.run_project_synthesizer")
     def test_stale_proposal_regeneration_gets_new_idempotent_job(self, run_synthesizer):
