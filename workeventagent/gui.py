@@ -83,8 +83,11 @@ from workeventagent.knowledge_store import (
     transition_proposal,
 )
 from workeventagent.project_synthesis import (
+    apply_document_proposal,
+    apply_section_bundle,
     build_document_proposal,
     build_section_bundle,
+    recover_applying_proposal,
     revise_section_bundle,
     select_source_events,
 )
@@ -145,6 +148,8 @@ def _main_impl() -> None:
         "knowledge_retry_job": handle_knowledge_retry_job,
         "knowledge_revise_proposal": handle_knowledge_revise_proposal,
         "knowledge_reject_proposal": handle_knowledge_reject_proposal,
+        "knowledge_apply_proposal": handle_knowledge_apply_proposal,
+        "knowledge_apply_document": handle_knowledge_apply_document,
         "search": handle_search,
         "correct_event": handle_correct_event,
         "correction_recoveries": handle_correction_recoveries,
@@ -1044,6 +1049,15 @@ def handle_knowledge_recover(request: dict) -> dict:
     import workeventagent.knowledge_store as knowledge_store
 
     recovered = knowledge_store.recover_jobs(workspace)
+    recovered_proposal_ids: list[str] = []
+    for proposal in knowledge_store.list_proposals(workspace):
+        if proposal.get("state") != "applying":
+            continue
+        project_path = Path(str(proposal.get("project_path", "")))
+        if not project_path.is_file() or not _project_within_workspace(workspace, project_path):
+            continue
+        recover_applying_proposal(project_path, proposal)
+        recovered_proposal_ids.append(proposal["proposal_id"])
     recovered_run_ids: list[str] = []
     for run in knowledge_store.list_schedule_runs(workspace):
         ensured = knowledge_store.ensure_schedule_children(workspace, run["run_id"])
@@ -1083,6 +1097,7 @@ def handle_knowledge_recover(request: dict) -> dict:
     return {
         "ok": True,
         "recovered_job_ids": [job["job_id"] for job in recovered],
+        "recovered_proposal_ids": recovered_proposal_ids,
         "recovered_run_ids": recovered_run_ids,
         "archived_capture_ids": archived_ids,
     }
@@ -1339,6 +1354,50 @@ def handle_knowledge_reject_proposal(request: dict) -> dict:
         return {"ok": True, "proposal": proposal}
     except (KeyError, TypeError, ValueError) as exc:
         return _knowledge_error("rejection_conflict", str(exc))
+
+
+def _trusted_apply_request(request: dict, proposal_kind: str) -> tuple[Path, Path, dict, int]:
+    workspace = Path(request["workspace"])
+    project_path = Path(str(request.get("project_path", "")))
+    if not project_path.is_file() or not _project_within_workspace(workspace, project_path):
+        raise ValueError("project_path must be a project inside workspace")
+    proposal = get_proposal(workspace, str(request["proposal_id"]))
+    if proposal.get("proposal_kind") != proposal_kind:
+        raise ValueError(f"proposal is not a {proposal_kind}")
+    if Path(str(proposal.get("project_path", ""))).resolve() != project_path.resolve():
+        raise ValueError("proposal project identity does not match request")
+    return workspace, project_path, proposal, int(request["expected_version"])
+
+
+def handle_knowledge_apply_proposal(request: dict) -> dict:
+    try:
+        _workspace, project_path, proposal, expected_version = _trusted_apply_request(
+            request, "section_bundle"
+        )
+        return apply_section_bundle(
+            project_path,
+            Path(str(request["db_path"])),
+            proposal,
+            expected_version,
+            str(request.get("today") or datetime.now(timezone.utc).strftime("%Y-%m-%d")),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        return _knowledge_error("apply_conflict", str(exc))
+
+
+def handle_knowledge_apply_document(request: dict) -> dict:
+    try:
+        _workspace, project_path, proposal, expected_version = _trusted_apply_request(
+            request, "module_document"
+        )
+        return apply_document_proposal(
+            project_path,
+            proposal,
+            expected_version,
+            str(request.get("today") or datetime.now(timezone.utc).strftime("%Y-%m-%d")),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        return _knowledge_error("apply_conflict", str(exc))
 
 
 def _inbox_attachment_paths(workspace: Path, card: dict) -> list[dict]:

@@ -11,19 +11,26 @@ import copy
 import difflib
 import hashlib
 import json
+import os
 import re
+import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
 
 from workeventagent.ids import make_unique_stable_id
 from workeventagent.project_schema import (
+    find_section,
     parse_frontmatter,
     parse_timeline_events,
     schema_version,
     section_content,
     section_hash,
     validate_reviewed_content,
+    update_frontmatter,
 )
+from workeventagent.markdown_store import write_project_atomically
+from workeventagent.index_store import init_db, rebuild_index
+from workeventagent.knowledge_store import get_proposal, transition_proposal
 
 
 ALLOWED_TARGETS = {"current-panorama", "technical-overview", "project-knowledge"}
@@ -380,3 +387,347 @@ def build_document_proposal(
         "updated_at": created_at,
         "supersedes": None,
     }
+
+
+def _whole_hash(content: str) -> str:
+    return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _replace_controlled_section(text: str, proposal_id: str, source_ids: list[str], change: dict) -> str:
+    target = str(change.get("target_section", ""))
+    if target not in ALLOWED_TARGETS:
+        raise ValueError(f"unsupported target section: {target}")
+    after = str(change.get("after", ""))
+    lines = after.lstrip("\n").splitlines()
+    expected_meta = (
+        f"<!-- panorama-meta source_events={','.join(source_ids)} "
+        f"proposal={proposal_id} -->"
+    )
+    if not lines or lines[0] != expected_meta:
+        raise ValueError(f"invalid wrapper metadata for {target}")
+    narrative = "\n".join(lines[1:]).strip("\n")
+    validate_reviewed_content(narrative)
+    if _content_hash(after) != change.get("target_section_hash"):
+        raise ValueError(f"target hash mismatch for {target}")
+    section = find_section(text, target)
+    rendered = "\n" + after.strip("\n") + "\n\n"
+    return text[: section.content_start - 1] + rendered + text[section.content_end :]
+
+
+def _validate_source_snapshots(text: str, source_events: list[dict]) -> list[dict]:
+    event_ids = [str(event.get("event_id", "")) for event in source_events]
+    current = select_source_events(text, event_ids=event_ids)
+    if current != source_events:
+        raise ValueError("source event snapshot changed")
+    return current
+
+
+def _mark_proposal_stale(workspace: Path, proposal: dict, reason: str) -> dict:
+    current = get_proposal(workspace, proposal["proposal_id"])
+    if current["state"] == "applying":
+        return transition_proposal(
+            workspace,
+            current["proposal_id"],
+            current["version"],
+            {"applying"},
+            "stale",
+            {"stale_reason": reason},
+        )
+    return current
+
+
+def _apply_section_from_applying(
+    project_path: Path,
+    db_path: Path,
+    proposal: dict,
+    today: str,
+) -> dict:
+    workspace = project_path.parent
+    try:
+        text = project_path.read_text(encoding="utf-8")
+        if schema_version(text) < 2:
+            raise ValueError("Phase B requires schema v2")
+        metadata = parse_frontmatter(text)
+        if metadata.get("project_id") != proposal.get("project_id"):
+            raise ValueError("project identity changed")
+        current_sources = _validate_source_snapshots(text, list(proposal.get("source_events", [])))
+        source_ids = [str(event["event_id"]) for event in current_sources]
+        changes = list(proposal.get("changes", []))
+        if not changes:
+            raise ValueError("section bundle is empty")
+        for change in changes:
+            target = str(change.get("target_section", ""))
+            if target not in ALLOWED_TARGETS:
+                raise ValueError(f"unsupported target section: {target}")
+            if section_hash(text, target) != change.get("base_section_hash"):
+                raise ValueError(f"stale base hash for {target}")
+        rendered = text
+        for change in changes:
+            rendered = _replace_controlled_section(
+                rendered, proposal["proposal_id"], source_ids, change
+            )
+        rendered = update_frontmatter(rendered, {"updated": today})
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        stale = _mark_proposal_stale(workspace, proposal, str(exc))
+        return {"ok": False, "kind": "stale", "error": str(exc), "proposal": stale}
+
+    write_project_atomically(project_path, rendered)
+    readback = project_path.read_text(encoding="utf-8")
+    failed = [
+        change["target_section"]
+        for change in proposal["changes"]
+        if section_hash(readback, change["target_section"]) != change["target_section_hash"]
+        or f"proposal={proposal['proposal_id']}" not in section_content(readback, change["target_section"])
+    ]
+    if failed:
+        return {
+            "ok": False,
+            "kind": "readback_failed",
+            "error": f"read-back verification failed for: {', '.join(failed)}",
+            "proposal": get_proposal(workspace, proposal["proposal_id"]),
+        }
+    current = get_proposal(workspace, proposal["proposal_id"])
+    applied = transition_proposal(
+        workspace,
+        current["proposal_id"],
+        current["version"],
+        {"applying"},
+        "applied",
+        {"applied_project_hash": _whole_hash(readback)},
+    )
+    try:
+        init_db(db_path)
+        rebuild_index(db_path, [project_path])
+    except Exception as exc:
+        return {
+            "ok": True,
+            "kind": "applied_index_warning",
+            "warning": str(exc),
+            "proposal": applied,
+        }
+    return {"ok": True, "kind": "applied", "proposal": applied}
+
+
+def apply_section_bundle(
+    project_path: Path,
+    db_path: Path,
+    bundle: dict,
+    expected_version: int,
+    today: str,
+) -> dict:
+    project_path = Path(project_path)
+    workspace = project_path.parent
+    try:
+        trusted = get_proposal(workspace, str(bundle.get("proposal_id", "")))
+        if trusted != bundle:
+            raise ValueError("proposal payload does not match durable ledger")
+        applying = transition_proposal(
+            workspace,
+            trusted["proposal_id"],
+            expected_version,
+            {"needs_confirmation"},
+            "applying",
+            {"apply_started_at": _iso()},
+        )
+    except (TypeError, ValueError) as exc:
+        return {"ok": False, "kind": "apply_conflict", "error": str(exc)}
+    return _apply_section_from_applying(project_path, Path(db_path), applying, today)
+
+
+def _validate_module_contract(preview: str, proposal: dict) -> None:
+    metadata = parse_frontmatter(preview)
+    required = {
+        "doc_kind": "project_module",
+        "project_id": str(proposal["project_id"]),
+        "module_id": str(proposal["module_id"]),
+        "order": str(proposal["order"]),
+        "include_in_compendium": "true",
+    }
+    for key, value in required.items():
+        if metadata.get(key) != value:
+            raise ValueError(f"module preview has invalid {key}")
+    conclusion = re.search(
+        r"<!-- section:module-conclusion -->\s*(.*?)\s*## .*?<!-- section:module-body -->",
+        preview,
+        re.DOTALL,
+    )
+    body = re.search(r"<!-- section:module-body -->\s*(.+?)\s*$", preview, re.DOTALL)
+    if not conclusion or not conclusion.group(1).strip() or not body or not body.group(1).strip():
+        raise ValueError("module conclusion and body are required")
+    if _content_hash(preview) != proposal.get("preview_hash"):
+        raise ValueError("module preview hash changed")
+
+
+def _document_target(project_path: Path, proposal: dict) -> Path:
+    relative = Path(str(proposal.get("target_path", "")))
+    expected = Path(str(proposal["project_id"])) / "docs" / str(proposal["filename"])
+    if relative.is_absolute() or relative != expected or len(relative.parts) != 3:
+        raise ValueError("document target must be one wrapper-owned file under project docs")
+    target = project_path.parent / relative
+    docs = project_path.parent / str(proposal["project_id"]) / "docs"
+    if target.parent.resolve() != docs.resolve():
+        raise ValueError("document target escapes project docs")
+    return target
+
+
+def _validate_document_link(project_path: Path, proposal: dict) -> None:
+    workspace = project_path.parent
+    linked = get_proposal(workspace, str(proposal.get("linked_section_proposal_id", "")))
+    if linked.get("state") != "applied":
+        raise ValueError("linked Technical Overview proposal is not applied")
+    technical = next(
+        (
+            change
+            for change in linked.get("changes", [])
+            if change.get("target_section") == "technical-overview"
+        ),
+        None,
+    )
+    text = project_path.read_text(encoding="utf-8")
+    if technical is None or technical.get("target_section_hash") != proposal.get("linked_technical_overview_hash"):
+        raise ValueError("linked Technical Overview identity changed")
+    if section_hash(text, "technical-overview") != proposal.get("linked_technical_overview_hash"):
+        raise ValueError("current Technical Overview no longer matches the confirmed proposal")
+    if _normalized(str(proposal.get("retained_summary", ""))) not in _normalized(
+        section_content(text, "technical-overview")
+    ):
+        raise ValueError("retained Technical Overview summary is missing")
+
+
+def _atomic_create_module(target: Path, preview: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        raise ValueError("document target already exists")
+    tmp = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(preview, encoding="utf-8")
+    if target.exists():
+        tmp.unlink(missing_ok=True)
+        raise ValueError("document target appeared during create")
+    os.replace(tmp, target)
+
+
+def _apply_document_from_applying(project_path: Path, proposal: dict) -> dict:
+    workspace = project_path.parent
+    try:
+        target = _document_target(project_path, proposal)
+        preview = str(proposal.get("preview", ""))
+        _validate_module_contract(preview, proposal)
+        _validate_document_link(project_path, proposal)
+        if target.exists():
+            if _content_hash(target.read_text(encoding="utf-8")) == proposal.get("preview_hash"):
+                current = get_proposal(workspace, proposal["proposal_id"])
+                applied = transition_proposal(
+                    workspace,
+                    current["proposal_id"],
+                    current["version"],
+                    {"applying"},
+                    "applied",
+                    {"applied_document_hash": proposal["preview_hash"]},
+                )
+                return {"ok": True, "kind": "applied", "proposal": applied}
+            raise ValueError("document target exists with different content")
+        module_ids, filenames, _orders = _scan_modules(project_path)
+        if proposal["module_id"] in module_ids or proposal["filename"] in filenames:
+            raise ValueError("duplicate module identity or filename")
+        _atomic_create_module(target, preview)
+        if _content_hash(target.read_text(encoding="utf-8")) != proposal["preview_hash"]:
+            return {
+                "ok": False,
+                "kind": "readback_failed",
+                "error": "module read-back verification failed",
+                "proposal": get_proposal(workspace, proposal["proposal_id"]),
+            }
+        current = get_proposal(workspace, proposal["proposal_id"])
+        applied = transition_proposal(
+            workspace,
+            current["proposal_id"],
+            current["version"],
+            {"applying"},
+            "applied",
+            {"applied_document_hash": proposal["preview_hash"]},
+        )
+        return {"ok": True, "kind": "applied", "proposal": applied}
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        stale = _mark_proposal_stale(workspace, proposal, str(exc))
+        return {"ok": False, "kind": "stale", "error": str(exc), "proposal": stale}
+
+
+def apply_document_proposal(
+    project_path: Path,
+    proposal: dict,
+    expected_version: int,
+    today: str,
+) -> dict:
+    del today  # The immutable preview already owns its confirmed updated date.
+    project_path = Path(project_path)
+    workspace = project_path.parent
+    try:
+        trusted = get_proposal(workspace, str(proposal.get("proposal_id", "")))
+        if trusted != proposal:
+            raise ValueError("proposal payload does not match durable ledger")
+        # A premature click is a confirmation conflict, not a permanently stale
+        # proposal. Revalidate the same link again after the CAS transition.
+        _document_target(project_path, trusted)
+        _validate_module_contract(str(trusted.get("preview", "")), trusted)
+        _validate_document_link(project_path, trusted)
+        applying = transition_proposal(
+            workspace,
+            trusted["proposal_id"],
+            expected_version,
+            {"needs_confirmation"},
+            "applying",
+            {"apply_started_at": _iso()},
+        )
+    except (TypeError, ValueError) as exc:
+        return {"ok": False, "kind": "apply_conflict", "error": str(exc)}
+    return _apply_document_from_applying(project_path, applying)
+
+
+def recover_applying_proposal(project_path: Path, proposal: dict) -> str:
+    project_path = Path(project_path)
+    workspace = project_path.parent
+    trusted = get_proposal(workspace, str(proposal.get("proposal_id", "")))
+    if trusted != proposal or trusted.get("state") != "applying":
+        raise ValueError("proposal is not the durable applying entity")
+    if trusted.get("proposal_kind") == "module_document":
+        target = _document_target(project_path, trusted)
+        if target.exists():
+            if _content_hash(target.read_text(encoding="utf-8")) == trusted.get("preview_hash"):
+                transition_proposal(
+                    workspace,
+                    trusted["proposal_id"],
+                    trusted["version"],
+                    {"applying"},
+                    "applied",
+                    {"applied_document_hash": trusted["preview_hash"]},
+                )
+                return "applied"
+            _mark_proposal_stale(workspace, trusted, "document target has different content")
+            return "stale"
+        result = _apply_document_from_applying(project_path, trusted)
+        return "resumed" if result.get("ok") else str(result.get("kind", "stale"))
+
+    text = project_path.read_text(encoding="utf-8")
+    current_hashes = [section_hash(text, change["target_section"]) for change in trusted["changes"]]
+    target_hashes = [change["target_section_hash"] for change in trusted["changes"]]
+    base_hashes = [change["base_section_hash"] for change in trusted["changes"]]
+    if current_hashes == target_hashes:
+        transition_proposal(
+            workspace,
+            trusted["proposal_id"],
+            trusted["version"],
+            {"applying"},
+            "applied",
+            {"applied_project_hash": _whole_hash(text)},
+        )
+        return "applied"
+    if current_hashes == base_hashes:
+        result = _apply_section_from_applying(
+            project_path,
+            workspace / "index.sqlite",
+            trusted,
+            datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        )
+        return "resumed" if result.get("ok") else str(result.get("kind", "stale"))
+    _mark_proposal_stale(workspace, trusted, "mixed base/target or unknown section hashes")
+    return "stale"
