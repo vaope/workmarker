@@ -68,6 +68,25 @@ from workeventagent.opencode_runner import (
     run_archivist,
     run_project_router,
     run_reporter,
+    run_project_synthesizer,
+    parse_synthesis_output,
+)
+from workeventagent.knowledge_store import (
+    create_proposal,
+    enqueue_job,
+    get_job,
+    get_proposal,
+    list_jobs,
+    list_proposals,
+    list_schedule_runs,
+    transition_job,
+    transition_proposal,
+)
+from workeventagent.project_synthesis import (
+    build_document_proposal,
+    build_section_bundle,
+    revise_section_bundle,
+    select_source_events,
 )
 from workeventagent.registry import scan_workspace
 
@@ -119,6 +138,13 @@ def _main_impl() -> None:
         "inbox_commit": handle_inbox_commit,
         "inbox_cancel": handle_inbox_cancel,
         "knowledge_recover": handle_knowledge_recover,
+        "knowledge_enqueue": handle_knowledge_enqueue,
+        "knowledge_enqueue_schedule": handle_knowledge_enqueue_schedule,
+        "knowledge_process_job": handle_knowledge_process_job,
+        "knowledge_state": handle_knowledge_state,
+        "knowledge_retry_job": handle_knowledge_retry_job,
+        "knowledge_revise_proposal": handle_knowledge_revise_proposal,
+        "knowledge_reject_proposal": handle_knowledge_reject_proposal,
         "search": handle_search,
         "correct_event": handle_correct_event,
         "correction_recoveries": handle_correction_recoveries,
@@ -1015,12 +1041,17 @@ def handle_inbox_commit(request: dict) -> dict:
 def handle_knowledge_recover(request: dict) -> dict:
     """Recover interrupted high-impact source commits before worker startup."""
     workspace = Path(request["workspace"])
-    from workeventagent.knowledge_store import list_jobs, recover_jobs
+    import workeventagent.knowledge_store as knowledge_store
 
-    recovered = recover_jobs(workspace)
+    recovered = knowledge_store.recover_jobs(workspace)
+    recovered_run_ids: list[str] = []
+    for run in knowledge_store.list_schedule_runs(workspace):
+        ensured = knowledge_store.ensure_schedule_children(workspace, run["run_id"])
+        knowledge_store.evaluate_schedule_run(workspace, ensured["run_id"])
+        recovered_run_ids.append(ensured["run_id"])
     cards = {card.get("capture_id"): card for card in list_captures(workspace)}
     archived_ids: list[str] = []
-    for job in list_jobs(workspace):
+    for job in knowledge_store.list_jobs(workspace):
         capture_id = str(job.get("capture_id", ""))
         source_ids = list(job.get("source_event_ids", []))
         card = cards.get(capture_id)
@@ -1052,8 +1083,262 @@ def handle_knowledge_recover(request: dict) -> dict:
     return {
         "ok": True,
         "recovered_job_ids": [job["job_id"] for job in recovered],
+        "recovered_run_ids": recovered_run_ids,
         "archived_capture_ids": archived_ids,
     }
+
+
+def _knowledge_error(kind: str, error: str) -> dict:
+    return {"ok": False, "kind": kind, "error": error}
+
+
+def _project_within_workspace(workspace: Path, project_path: Path) -> bool:
+    try:
+        project_path.resolve().relative_to(workspace.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def handle_knowledge_enqueue(request: dict) -> dict:
+    """Enqueue a directed job only; trusted capture owns high-impact enqueue."""
+    workspace = Path(request["workspace"])
+    trigger = str(request.get("trigger", ""))
+    if trigger != "directed":
+        return _knowledge_error("invalid_trigger", "manual enqueue supports only directed synthesis")
+    project_path = Path(str(request.get("project_path", "")))
+    if not project_path.is_file() or not _project_within_workspace(workspace, project_path):
+        return _knowledge_error("invalid_project", "project_path must be a project inside workspace")
+    text = project_path.read_text(encoding="utf-8")
+    if schema_version(text) < 2:
+        return _knowledge_error("schema_v2_required", "Phase B requires schema v2")
+    event_ids = request.get("event_ids")
+    if not isinstance(event_ids, list) or not event_ids or any(not isinstance(value, str) for value in event_ids):
+        return _knowledge_error("invalid_events", "one or more event_ids are required")
+    try:
+        select_source_events(text, event_ids=event_ids)
+    except ValueError as exc:
+        return _knowledge_error("invalid_events", str(exc))
+    project_id = parse_frontmatter(text).get("project_id", "")
+    idempotency_key = f"directed:{project_id}:{','.join(event_ids)}"
+    job = enqueue_job(
+        workspace,
+        {
+            "idempotency_key": idempotency_key,
+            "state": "queued",
+            "project_id": project_id,
+            "project_path": str(project_path),
+            "trigger": "directed",
+            "source_event_ids": list(event_ids),
+        },
+    )
+    return {"ok": True, "job": job}
+
+
+def handle_knowledge_enqueue_schedule(request: dict) -> dict:
+    workspace = Path(request["workspace"])
+    cadence = str(request.get("cadence", ""))
+    schedule_key = str(request.get("schedule_key", ""))
+    if cadence not in {"daily", "weekly"} or not schedule_key:
+        return _knowledge_error("invalid_schedule", "cadence and schedule_key are required")
+    date_from = str(request.get("date_from", ""))
+    date_to = str(request.get("date_to", ""))
+    projects: list[dict] = []
+    for candidate in scan_workspace(workspace):
+        project_path = Path(candidate["path"])
+        text = project_path.read_text(encoding="utf-8")
+        if schema_version(text) < 2:
+            continue
+        projects.append(
+            {
+                "project_id": candidate["project_id"],
+                "project_path": str(project_path),
+                "date_from": date_from,
+                "date_to": date_to,
+            }
+        )
+    import workeventagent.knowledge_store as knowledge_store
+
+    run = knowledge_store.create_schedule_run(workspace, cadence, schedule_key, projects)
+    run = knowledge_store.ensure_schedule_children(workspace, run["run_id"])
+    return {"ok": True, "run": run}
+
+
+def _knowledge_prompt(job: dict, source_events: list[dict]) -> str:
+    lines = [f"trigger={job['trigger']}"]
+    if job["trigger"] == "weekly":
+        lines.append("Perform a full Phase B review of current panorama, technical overview, and project knowledge.")
+    lines.append("Use only these wrapper-selected source events:")
+    for event in source_events:
+        lines.append(
+            f"- {event.get('event_id')}: {event.get('timestamp', '')} | "
+            f"{event.get('summary', '')}"
+        )
+    lines.append("Return the bounded JSON contract only.")
+    return "\n".join(lines)
+
+
+def handle_knowledge_process_job(request: dict) -> dict:
+    workspace = Path(request["workspace"])
+    job_id = str(request.get("job_id", ""))
+    try:
+        job = get_job(workspace, job_id)
+    except ValueError as exc:
+        return _knowledge_error("not_found", str(exc))
+    if job["state"] != "queued":
+        return _knowledge_error("invalid_state", f"job is {job['state']}, not queued")
+    job = transition_job(workspace, job_id, job["version"], {"queued"}, "processing")
+    project_path = Path(job["project_path"])
+    try:
+        text = project_path.read_text(encoding="utf-8")
+        if schema_version(text) < 2:
+            raise ValueError("Phase B requires schema v2")
+        if job["trigger"] in {"directed", "high_impact"}:
+            source_events = select_source_events(text, event_ids=list(job.get("source_event_ids", [])))
+        elif job["trigger"] in {"daily", "weekly"}:
+            source_events = select_source_events(
+                text,
+                date_from=job.get("date_from"),
+                date_to=job.get("date_to"),
+            )
+        else:
+            raise ValueError(f"unsupported knowledge trigger: {job['trigger']}")
+        if not source_events:
+            finished = transition_job(
+                workspace,
+                job_id,
+                job["version"],
+                {"processing"},
+                "skipped_no_evidence",
+            )
+            return {"ok": True, "job": finished, "proposal_ids": []}
+
+        raw = run_project_synthesizer(
+            _knowledge_prompt(job, source_events),
+            project_path,
+            opencode_bin=str(request.get("opencode_bin", "opencode")),
+            model=str(request.get("model", request.get("opencode_model", ""))),
+        )
+        parsed = parse_synthesis_output(raw)
+        bundle = build_section_bundle(
+            project_path,
+            job["trigger"],
+            source_events,
+            parsed,
+        )
+        if bundle is None:
+            finished = transition_job(
+                workspace,
+                job_id,
+                job["version"],
+                {"processing"},
+                "skipped_no_change",
+            )
+            return {"ok": True, "job": finished, "proposal_ids": []}
+        document = None
+        if parsed.get("document_suggestion") is not None:
+            document = build_document_proposal(
+                project_path,
+                job["trigger"],
+                source_events,
+                parsed["document_suggestion"],
+                linked_section_bundle=bundle,
+            )
+
+        section_proposal = create_proposal(workspace, bundle)
+        proposal_ids = [section_proposal["proposal_id"]]
+        if document is not None:
+            document_proposal = create_proposal(workspace, document)
+            proposal_ids.append(document_proposal["proposal_id"])
+        finished = transition_job(
+            workspace,
+            job_id,
+            job["version"],
+            {"processing"},
+            "completed",
+            {"proposal_ids": proposal_ids},
+        )
+        return {"ok": True, "job": finished, "proposal_ids": proposal_ids}
+    except Exception as exc:
+        current = get_job(workspace, job_id)
+        if current["state"] == "processing":
+            current = transition_job(
+                workspace,
+                job_id,
+                current["version"],
+                {"processing"},
+                "failed",
+                {"last_error": str(exc)},
+            )
+        return {"ok": False, "kind": "processing_failed", "error": str(exc), "job": current}
+
+
+def handle_knowledge_state(request: dict) -> dict:
+    workspace = Path(request["workspace"])
+    project_path = request.get("project_path")
+    return {
+        "ok": True,
+        "jobs": list_jobs(workspace, project_path=project_path),
+        "proposals": list_proposals(workspace, project_path=project_path),
+        "runs": list_schedule_runs(workspace),
+    }
+
+
+def handle_knowledge_retry_job(request: dict) -> dict:
+    workspace = Path(request["workspace"])
+    try:
+        job = transition_job(
+            workspace,
+            str(request["job_id"]),
+            int(request["expected_version"]),
+            {"failed"},
+            "queued",
+            {"last_error": ""},
+        )
+        return {"ok": True, "job": job}
+    except (KeyError, TypeError, ValueError) as exc:
+        return _knowledge_error("retry_conflict", str(exc))
+
+
+def handle_knowledge_revise_proposal(request: dict) -> dict:
+    workspace = Path(request["workspace"])
+    try:
+        original = get_proposal(workspace, str(request["proposal_id"]))
+        if original["version"] != int(request["expected_version"]):
+            raise ValueError("proposal version conflict")
+        if original["state"] != "needs_confirmation":
+            raise ValueError("proposal is not awaiting confirmation")
+        revised, _superseded = revise_section_bundle(
+            original,
+            list(request.get("included_change_ids", [])),
+        )
+        revised = create_proposal(workspace, revised)
+        old = transition_proposal(
+            workspace,
+            original["proposal_id"],
+            original["version"],
+            {"needs_confirmation"},
+            "superseded",
+            {"superseded_by": revised["proposal_id"]},
+        )
+        return {"ok": True, "proposal": revised, "superseded": old}
+    except (KeyError, TypeError, ValueError) as exc:
+        return _knowledge_error("revision_conflict", str(exc))
+
+
+def handle_knowledge_reject_proposal(request: dict) -> dict:
+    workspace = Path(request["workspace"])
+    try:
+        proposal = transition_proposal(
+            workspace,
+            str(request["proposal_id"]),
+            int(request["expected_version"]),
+            {"needs_confirmation"},
+            "rejected",
+        )
+        return {"ok": True, "proposal": proposal}
+    except (KeyError, TypeError, ValueError) as exc:
+        return _knowledge_error("rejection_conflict", str(exc))
 
 
 def _inbox_attachment_paths(workspace: Path, card: dict) -> list[dict]:
