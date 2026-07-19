@@ -34,6 +34,8 @@ SECTION_SPECS = (
     SectionSpec("attachments", "附件", "append-only", "Attachments"),
     SectionSpec("timeline", "事件证据", "append-only", "Timeline"),
     SectionSpec("rollups", "历史摘要", "derived", "Daily / Weekly Rollups"),
+    SectionSpec("module-conclusion", "模块结论", "reviewed", None),
+    SectionSpec("module-body", "详细内容", "reviewed", None),
 )
 SECTION_BY_ID = {spec.section_id: spec for spec in SECTION_SPECS}
 
