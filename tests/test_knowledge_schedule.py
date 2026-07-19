@@ -108,4 +108,3 @@ def test_schedule_helper_does_not_mutate_config() -> None:
         "console.log(JSON.stringify({unchanged:before===JSON.stringify(s)}));"
     )
     assert result["unchanged"] is True
-
