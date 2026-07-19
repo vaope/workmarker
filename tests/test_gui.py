@@ -2686,6 +2686,41 @@ class PhaseBKnowledgeHandlersTest(unittest.TestCase):
             self.assertEqual(get_proposal(workspace, proposal["proposal_id"])["state"], "applied")
 
     @patch("workeventagent.gui.run_project_synthesizer")
+    def test_stale_proposal_regeneration_gets_new_idempotent_job(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+        from workeventagent.knowledge_store import transition_proposal as durable_transition
+
+        run_synthesizer.return_value = self._agent_output("current-panorama")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            request = {
+                "workspace": str(workspace), "trigger": "directed",
+                "project_path": str(project), "event_ids": ["event-a"],
+            }
+            original = gui_module.handle_knowledge_enqueue(request)
+            processed = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": original["job"]["job_id"]
+            })
+            proposal = get_proposal(workspace, processed["proposal_ids"][0])
+            durable_transition(
+                workspace, proposal["proposal_id"], proposal["version"],
+                {"needs_confirmation"}, "stale",
+            )
+
+            regenerated = gui_module.handle_knowledge_enqueue({
+                **request, "regenerate_of": proposal["proposal_id"]
+            })
+            repeated = gui_module.handle_knowledge_enqueue({
+                **request, "regenerate_of": proposal["proposal_id"]
+            })
+
+            self.assertTrue(regenerated["ok"])
+            self.assertEqual(regenerated["job"]["state"], "queued")
+            self.assertNotEqual(regenerated["job"]["job_id"], original["job"]["job_id"])
+            self.assertEqual(repeated["job"]["job_id"], regenerated["job"]["job_id"])
+
+    @patch("workeventagent.gui.run_project_synthesizer")
     def test_document_apply_handler_requires_separate_confirmation(self, run_synthesizer):
         from workeventagent import gui as gui_module
 

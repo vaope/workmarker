@@ -130,3 +130,60 @@ def test_main_process_maps_typed_knowledge_ipc_to_bounded_backend_commands() -> 
     for channel, command in expected.items():
         assert f"ipcMain.handle('{channel}'" in source
         assert f"'{command}'" in source
+
+
+def test_knowledge_review_ui_uses_timeline_and_search_event_ids() -> None:
+    html = Path("client/windows/main.html").read_text(encoding="utf-8")
+    source = Path("client/windows/main.js").read_text(encoding="utf-8")
+    panorama = Path("client/windows/project-panorama.js").read_text(encoding="utf-8")
+
+    assert "从事件更新全景" in panorama
+    assert "wea.listTimeline" in source
+    assert "knowledge-event-select" in source
+    assert "请至少选择一个事件" in source
+    assert "data-event-id" in source
+    assert "search-knowledge-select" in source
+    assert "同一项目" in source
+    assert 'id="knowledge-event-modal"' in html
+
+
+def test_inbox_aggregates_durable_knowledge_without_reusing_capture_store() -> None:
+    html = Path("client/windows/main.html").read_text(encoding="utf-8")
+    source = Path("client/windows/main.js").read_text(encoding="utf-8")
+
+    assert '<script src="knowledge-proposals.js"></script>' in html
+    assert "wea.getKnowledgeState" in source
+    assert "待审核知识" in source
+    assert "KnowledgeProposals.renderReview" in source
+    assert "KnowledgeProposals.renderImpactBadge" in source
+    assert "knowledge_impact" in source
+    assert "wea.onKnowledgeUpdated" in source
+    assert "toast(" in source[source.index("wea.onKnowledgeUpdated"):]
+
+
+def test_proposal_confirmation_revises_before_whole_bundle_apply() -> None:
+    source = Path("client/windows/main.js").read_text(encoding="utf-8")
+    start = source.index("async function confirmKnowledgeProposal")
+    body = source[start:source.index("async function confirmKnowledgeDocument")]
+
+    assert "expectedVersion" in body
+    assert "includedChangeIds" in body
+    assert "wea.reviseKnowledgeProposal" in body
+    assert body.index("wea.reviseKnowledgeProposal") < body.index("wea.applyKnowledgeProposal")
+    assert "stale" in body
+    assert "regenerate" in source
+    assert "regenerateOf" in source
+
+
+def test_settings_exposes_daily_and_weekly_knowledge_schedule_controls() -> None:
+    html = Path("client/windows/main.html").read_text(encoding="utf-8")
+    source = Path("client/windows/main.js").read_text(encoding="utf-8")
+    for control in (
+        "settings-knowledge-daily-enabled",
+        "settings-knowledge-daily-time",
+        "settings-knowledge-weekly-enabled",
+        "settings-knowledge-weekly-day",
+        "settings-knowledge-weekly-time",
+    ):
+        assert f'id="{control}"' in html
+        assert control in source

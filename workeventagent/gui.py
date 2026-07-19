@@ -1131,11 +1131,30 @@ def handle_knowledge_enqueue(request: dict) -> dict:
     if not isinstance(event_ids, list) or not event_ids or any(not isinstance(value, str) for value in event_ids):
         return _knowledge_error("invalid_events", "one or more event_ids are required")
     try:
-        select_source_events(text, event_ids=event_ids)
+        selected_sources = select_source_events(text, event_ids=event_ids)
     except ValueError as exc:
         return _knowledge_error("invalid_events", str(exc))
     project_id = parse_frontmatter(text).get("project_id", "")
-    idempotency_key = f"directed:{project_id}:{','.join(event_ids)}"
+    regenerate_of = str(request.get("regenerate_of", "")).strip()
+    if regenerate_of:
+        try:
+            stale = get_proposal(workspace, regenerate_of)
+        except ValueError as exc:
+            return _knowledge_error("invalid_regeneration", str(exc))
+        stale_source_ids = [str(event.get("event_id", "")) for event in stale.get("source_events", [])]
+        selected_source_ids = [str(event["event_id"]) for event in selected_sources]
+        if (
+            stale.get("state") != "stale"
+            or Path(str(stale.get("project_path", ""))).resolve() != project_path.resolve()
+            or stale_source_ids != selected_source_ids
+        ):
+            return _knowledge_error(
+                "invalid_regeneration",
+                "regeneration must preserve the stale proposal project and source events",
+            )
+        idempotency_key = f"directed-regenerate:{regenerate_of}"
+    else:
+        idempotency_key = f"directed:{project_id}:{','.join(event_ids)}"
     job = enqueue_job(
         workspace,
         {

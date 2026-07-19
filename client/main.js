@@ -547,6 +547,7 @@ function attachIpc() {
       trigger: 'directed',
       project_path: request.projectPath,
       event_ids: request.eventIds || [],
+      regenerate_of: request.regenerateOf || '',
     }, c.pythonCmd);
     if (!enqueued || !enqueued.ok) return enqueued;
     emitKnowledgeUpdated({ kind: 'job_queued', job_id: enqueued.job.job_id, job: enqueued.job });

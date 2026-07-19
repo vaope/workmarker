@@ -93,6 +93,11 @@ class PanoramaRendererTests(unittest.TestCase):
             self.assertIn(channel, preload_src)
         self.assertNotIn("writeProjectMarkdown", preload_src)
 
+    def test_panorama_has_directed_event_synthesis_entry(self):
+        rendered = _render_panorama()
+        self.assertIn("panorama-synthesize", rendered)
+        self.assertIn("从事件更新全景", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

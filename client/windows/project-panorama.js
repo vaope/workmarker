@@ -157,7 +157,7 @@
       '<span class="meta-status">' + esc(project.status) + '</span>' +
       '<span class="meta-phase">' + esc(project.phase) + '</span>' +
       '<span class="meta-updated">更新：' + esc(project.updated) + '</span>' +
-      '</div>' +
+      '</div><button class="ghost small panorama-synthesize" type="button">从事件更新全景</button>' +
       '</header>'
     );
 
