@@ -113,6 +113,7 @@
         <div class="search-bar">
           <input id="global-search" aria-label="搜索项目、工作项、任务、报告" placeholder="搜索项目、工作项、任务、报告…" />
           <button class="primary" id="search-run">搜索</button>
+          <button class="ghost hidden" id="search-knowledge-select">用所选事件更新全景</button>
         </div>
         <div id="search-results" class="search-results scroll-body"></div>
       </section>
@@ -242,6 +243,19 @@
         <input id="settings-model" type="text" placeholder="provider/model，留空使用 opencode 默认" />
         <span class="hint">示例：anthropic/claude-sonnet-4-5、openai/gpt-5.1</span>
       </label>
+      <fieldset class="settings-knowledge-schedule">
+        <legend>知识综合周期</legend>
+        <label><input id="settings-knowledge-daily-enabled" type="checkbox" /> 每日综合</label>
+        <input id="settings-knowledge-daily-time" type="time" value="23:30" />
+        <label><input id="settings-knowledge-weekly-enabled" type="checkbox" /> 每周综合</label>
+        <select id="settings-knowledge-weekly-day">
+          <option value="1">周一</option><option value="2">周二</option>
+          <option value="3">周三</option><option value="4">周四</option>
+          <option value="5">周五</option><option value="6">周六</option>
+          <option value="0">周日</option>
+        </select>
+        <input id="settings-knowledge-weekly-time" type="time" value="18:00" />
+      </fieldset>
       <div class="modal-actions">
         <button id="settings-cancel" class="ghost">取消</button>
         <button id="settings-save" class="primary">保存</button>
@@ -357,10 +371,24 @@
     </div>
   </div>
 
+  <div id="knowledge-event-modal" class="modal hidden">
+    <div class="modal-card knowledge-event-card">
+      <h2>从事件更新全景</h2>
+      <p class="hint">选择一个或多个真实 Timeline 事件。生成只会创建待审核提案，不会自动修改项目。</p>
+      <div id="knowledge-event-list" class="knowledge-event-list"></div>
+      <div class="modal-actions">
+        <button id="knowledge-event-cancel" class="ghost">取消</button>
+        <button id="knowledge-event-submit" class="primary">生成待审核提案</button>
+      </div>
+      <div id="knowledge-event-error" class="modal-error hidden"></div>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
 
   <script src="work-map.js"></script>
   <script src="project-panorama.js"></script>
+  <script src="knowledge-proposals.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

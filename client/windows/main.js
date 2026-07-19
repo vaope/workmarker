@@ -8,6 +8,8 @@ const state = {
   tasksData: null,      // {items:[{item_id,title,tasks:[...]}]}
   pending: [],          // [{tempPath, filename}]
   inboxCards: [],       // Inbox cards for Today summary
+  knowledgeState: { jobs: [], proposals: [], runs: [] },
+  searchResults: [],
   view: 'tasks',
   panoramaData: null,
   migrationPreview: null,
@@ -33,6 +35,17 @@ async function boot() {
     if (state.currentProject) refreshCurrent();
     if (state.view === 'inbox') loadInbox();
     refreshActionSummary();
+  });
+  wea.onKnowledgeUpdated((payload) => {
+    const kind = (payload && payload.kind) || 'updated';
+    const message = kind === 'job_queued' || kind === 'schedule_enqueued'
+      ? '知识综合已排队，可在收件箱查看进度'
+      : kind === 'job_error' || kind === 'schedule_error'
+        ? '知识综合遇到错误，可在收件箱重试'
+        : '知识综合状态已更新，请在收件箱审核';
+    toast(message, kind.includes('error') ? 'err' : 'info');
+    if (state.view === 'inbox') loadInbox();
+    else loadKnowledgeState(state.currentProject && state.currentProject.path).then(renderActionSummary);
   });
   loadReportSchedule();
   // Check for unfinished cross-project corrections on startup
@@ -110,6 +123,7 @@ function bindStaticHandlers() {
   if (srBtn) srBtn.addEventListener('click', runSearch);
   const gsInput = $('#global-search');
   if (gsInput) gsInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
+  $('#search-knowledge-select').addEventListener('click', synthesizeSelectedSearchEvents);
 
   // composer
   const input = $('#composer-input');
@@ -138,6 +152,8 @@ function bindStaticHandlers() {
   $('#profile-cancel').addEventListener('click', closeProfileModal);
   $('#section-save').addEventListener('click', saveSection);
   $('#section-cancel').addEventListener('click', closeSectionModal);
+  $('#knowledge-event-cancel').addEventListener('click', closeKnowledgeEventModal);
+  $('#knowledge-event-submit').addEventListener('click', submitKnowledgeEventSelection);
 
   // report
   $('#report-generate').addEventListener('click', generateReport);
@@ -213,12 +229,15 @@ async function selectProject(p) {
 async function refreshCurrent() {
   if (!state.currentProject) return;
   const path = state.currentProject.path;
-  const [tasks, panorama] = await Promise.all([
+  const [tasks, panorama, knowledge] = await Promise.all([
     wea.listTasks(path),
     wea.getProjectPanorama(path),
+    wea.getKnowledgeState(path),
   ]);
   state.tasksData = tasks && tasks.ok ? tasks : { items: [] };
   state.panoramaData = panorama && panorama.ok ? panorama : null;
+  state.knowledgeState = knowledge && knowledge.ok
+    ? knowledge : { jobs: [], proposals: [], runs: [] };
   renderProjectPanorama();
   const fresh = await wea.listProjects();
   if (fresh && fresh.ok) { state.projects = fresh.projects; renderProjectList(state.projects); }
@@ -261,13 +280,19 @@ function runSearch() {
         const kindLabel = { project: '项目', item: '工作项', task: '任务', timeline: '时间线', report: '报告', inbox: '收件箱' }[d.kind] || d.kind;
         const title = esc(d.title || d.snippet || '').substring(0, 120);
         const path = esc(d.path || '');
-        return '<div class="search-result" data-path="' + path + '" data-kind="' + d.kind + '" data-proj-id="' + esc(d.project_id || '') + '">' +
+        const eventSelector = d.kind === 'timeline' && d.event_id
+          ? '<input class="search-event-checkbox" type="checkbox" data-event-id="' + esc(d.event_id) +
+            '" data-project-id="' + esc(d.project_id || '') + '" data-path="' + path + '" />'
+          : '';
+        return '<div class="search-result" data-path="' + path + '" data-kind="' + d.kind + '" data-proj-id="' + esc(d.project_id || '') + '" data-event-id="' + esc(d.event_id || '') + '">' +
+          eventSelector +
           '<span class="search-kind">' + kindLabel + '</span>' +
           '<div class="search-title">' + title + '</div>' +
           (d.snippet ? '<div class="search-snippet">' + esc(d.snippet).substring(0, 200) + '</div>' : '') +
           (path ? '<div class="search-path">' + path + '</div>' : '') +
         '</div>';
       }).join('');
+    state.searchResults = r.results;
     bindSearchResults();
   }).catch((err) => {
     $('#search-results').innerHTML = '<div class="empty">错误: ' + esc(err.message || '') + '</div>';
@@ -276,7 +301,8 @@ function runSearch() {
 
 function bindSearchResults() {
   document.querySelectorAll('.search-result').forEach((el) => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (event) => {
+      if (event.target.classList.contains('search-event-checkbox')) return;
       const path = el.dataset.path;
       const kind = el.dataset.kind;
       const projId = el.dataset.projId;
@@ -285,6 +311,29 @@ function bindSearchResults() {
       if (proj) { selectProject(proj); switchView('tasks'); }
     });
   });
+  document.querySelectorAll('.search-event-checkbox').forEach((input) => {
+    input.addEventListener('change', () => {
+      const selected = Array.from(document.querySelectorAll('.search-event-checkbox:checked'));
+      const projectIds = new Set(selected.map((candidate) => candidate.dataset.projectId));
+      if (projectIds.size > 1) {
+        input.checked = false;
+        toast('知识综合只能选择同一项目的 Timeline 事件', 'err');
+      }
+      $('#search-knowledge-select').classList.toggle(
+        'hidden', !document.querySelector('.search-event-checkbox:checked')
+      );
+    });
+  });
+}
+
+async function synthesizeSelectedSearchEvents() {
+  const selected = Array.from(document.querySelectorAll('.search-event-checkbox:checked'));
+  if (!selected.length) { toast('请至少选择一个事件', 'err'); return; }
+  const projectIds = new Set(selected.map((input) => input.dataset.projectId));
+  if (projectIds.size !== 1) { toast('请选择同一项目的 Timeline 事件', 'err'); return; }
+  const project = state.projects.find((candidate) => candidate.project_id === selected[0].dataset.projectId);
+  if (!project) { toast('找不到事件所属项目', 'err'); return; }
+  await startDirectedKnowledge(project.path, selected.map((input) => input.dataset.eventId));
 }
 
 function renderProjectPanorama() {
@@ -302,6 +351,10 @@ function renderProjectPanorama() {
   var items = (state.tasksData && state.tasksData.items) || [];
   var workMapHtml = items.length ? WorkMap.render(items) : '';
   panoramaBody.innerHTML = ProjectPanorama.render(state.panoramaData, workMapHtml);
+  panoramaBody.insertAdjacentHTML(
+    'afterbegin',
+    KnowledgeProposals.renderBanner(state.knowledgeState.proposals, state.knowledgeState.jobs)
+  );
   bindPanoramaActions();
   if (state.panoramaData.migration_required) {
     showMigrationPrompt();
@@ -350,6 +403,8 @@ function bindWorkMapActions() {
 }
 
 function bindPanoramaActions() {
+  var synthesizeBtn = document.querySelector('.panorama-synthesize');
+  if (synthesizeBtn) synthesizeBtn.addEventListener('click', openKnowledgeEventModal);
   var migrationPreviewBtn = document.querySelector('.migration-preview-btn');
   if (migrationPreviewBtn) {
     migrationPreviewBtn.addEventListener('click', openMigrationModal);
@@ -368,13 +423,64 @@ function bindPanoramaActions() {
       var sec = (state.panoramaData && state.panoramaData.sections && state.panoramaData.sections[sectionId]) || {};
       var ids = sec.source_event_ids || [];
       if (!ids.length) {
-        toast('暂无已记录来源；自动证据综合将在 Phase B 提供', 'info');
+        toast('暂无已记录来源；可从 Timeline 事件生成待审核提案', 'info');
         return;
       }
       toast('来源事件: ' + ids.join(', '), 'info');
     });
   });
   bindWorkMapActions();
+}
+
+async function openKnowledgeEventModal() {
+  if (!state.currentProject) return;
+  const list = $('#knowledge-event-list');
+  const error = $('#knowledge-event-error');
+  list.innerHTML = '<div class="empty">正在读取 Timeline…</div>';
+  error.classList.add('hidden');
+  $('#knowledge-event-modal').classList.remove('hidden');
+  const result = await wea.listTimeline(state.currentProject.path);
+  const events = result && result.ok ? (result.events || []) : [];
+  list.innerHTML = events.length ? events.map((event) =>
+    '<label class="knowledge-event-row"><input class="knowledge-event-select" type="checkbox" data-event-id="' +
+    esc(event.event_id || '') + '" /><span><b>' + esc(event.event_id || '') + '</b> ' +
+    esc(event.summary || '') + '</span></label>'
+  ).join('') : '<div class="empty">当前项目没有可选事件</div>';
+}
+
+function closeKnowledgeEventModal() {
+  $('#knowledge-event-modal').classList.add('hidden');
+}
+
+async function submitKnowledgeEventSelection() {
+  const selected = Array.from(document.querySelectorAll('.knowledge-event-select:checked'))
+    .map((input) => input.dataset.eventId);
+  if (!selected.length) {
+    const error = $('#knowledge-event-error');
+    error.textContent = '请至少选择一个事件';
+    error.classList.remove('hidden');
+    return;
+  }
+  $('#knowledge-event-submit').disabled = true;
+  try {
+    await startDirectedKnowledge(state.currentProject.path, selected);
+    closeKnowledgeEventModal();
+  } finally {
+    $('#knowledge-event-submit').disabled = false;
+  }
+}
+
+async function startDirectedKnowledge(projectPath, eventIds, regenerateOf) {
+  toast('知识综合正在生成，完成后会进入待审核知识', 'info');
+  const result = await wea.enqueueKnowledge({ projectPath, eventIds, regenerateOf: regenerateOf || '' });
+  if (!result || !result.ok) {
+    toast('知识综合生成失败：' + ((result && result.error) || '未知错误'), 'err');
+    return result;
+  }
+  await loadKnowledgeState(projectPath);
+  switchView('inbox');
+  toast('知识综合已生成，请核对证据与差异后确认', 'ok');
+  return result;
 }
 
 async function toggleTaskCompletion(input, task) {
@@ -402,8 +508,13 @@ async function toggleTaskCompletion(input, task) {
 
 async function loadInbox() {
   try {
-    const res = await wea.listCaptures();
+    const [res, knowledge] = await Promise.all([
+      wea.listCaptures(),
+      wea.getKnowledgeState(null),
+    ]);
     state.inboxCards = (res && res.ok) ? (res.cards || []) : [];
+    state.knowledgeState = knowledge && knowledge.ok
+      ? knowledge : { jobs: [], proposals: [], runs: [] };
     renderInbox();
   } catch (_) {
     state.inboxCards = [];
@@ -420,9 +531,14 @@ function renderInbox() {
     renderInboxGroup('Needs confirmation', groups.needs_confirmation, true),
     renderInboxGroup('Processing', groups.processing, false),
     renderInboxGroup('Errors', groups.error, false),
+    '<div class="inbox-group knowledge-review-group"><h3 class="inbox-group-title">待审核知识</h3>' +
+      '<div id="knowledge-review">' + KnowledgeProposals.renderReview(
+        state.knowledgeState.proposals, state.knowledgeState.jobs
+      ) + '</div></div>',
     renderInboxGroup('Recent archived', groups.archived.slice(0, 20), false),
   ].join('');
   bindInboxActions();
+  bindKnowledgeActions();
 }
 
 function renderInboxGroup(label, cards, showConfirm) {
@@ -433,6 +549,7 @@ function renderInboxGroup(label, cards, showConfirm) {
       var icon = c.state === 'processing' ? '\u23F3' : c.state === 'error' ? '\u274C' : c.state === 'archived' ? '\uD83D\uDCC1' : '\u2705';
       var proj = c.selected_project ? esc(c.selected_project.title || '') : '';
       return '<div class="inbox-card"><div class="inbox-card-title">' + icon + ' ' + esc(s || c.text).substring(0, 80) + '</div>' +
+        KnowledgeProposals.renderImpactBadge(c.knowledge_impact) +
         '<div class="inbox-card-meta">' + (proj ? 'Project: ' + proj : '') + (c.state === 'error' ? ' ' + esc(c.error || '') : '') + '</div>' +
         '<div class="inbox-actions">' + renderInboxCardActions(c, showConfirm) + '</div></div>';
     }).join('') + '</div>';
@@ -455,20 +572,146 @@ function bindInboxActions() {
   document.querySelectorAll('.inbox-open').forEach(function(btn) { btn.addEventListener('click', function() { var proj = state.projects.find(function(p) { return p.path === btn.dataset.path; }); if (proj) selectProject(proj); }); });
 }
 
+async function loadKnowledgeState(projectPath) {
+  try {
+    const result = await wea.getKnowledgeState(projectPath || null);
+    state.knowledgeState = result && result.ok
+      ? result : { jobs: [], proposals: [], runs: [] };
+  } catch (_) {
+    state.knowledgeState = { jobs: [], proposals: [], runs: [] };
+  }
+  return state.knowledgeState;
+}
+
+function findKnowledgeProposal(proposalId) {
+  return (state.knowledgeState.proposals || [])
+    .find((proposal) => proposal.proposal_id === proposalId) || null;
+}
+
+function bindKnowledgeActions() {
+  document.querySelectorAll('.knowledge-confirm').forEach((button) => {
+    button.addEventListener('click', () => confirmKnowledgeProposal(button));
+  });
+  document.querySelectorAll('.knowledge-confirm-document').forEach((button) => {
+    button.addEventListener('click', () => confirmKnowledgeDocument(button));
+  });
+  document.querySelectorAll('.knowledge-reject').forEach((button) => {
+    button.addEventListener('click', () => rejectKnowledgeProposal(button));
+  });
+  document.querySelectorAll('.knowledge-retry').forEach((button) => {
+    button.addEventListener('click', () => retryKnowledgeJob(button));
+  });
+  document.querySelectorAll('.knowledge-regenerate').forEach((button) => {
+    button.addEventListener('click', () => regenerateKnowledgeProposal(button));
+  });
+}
+
+async function confirmKnowledgeProposal(button) {
+  let proposal = findKnowledgeProposal(button.dataset.proposalId);
+  if (!proposal) return;
+  const card = button.closest('.knowledge-card');
+  const includedChangeIds = Array.from(card.querySelectorAll('.knowledge-change-select:checked'))
+    .map((input) => input.dataset.changeId);
+  if (!includedChangeIds.length) { toast('至少保留一个变更；也可以直接拒绝提案', 'err'); return; }
+  button.disabled = true;
+  if (includedChangeIds.length !== (proposal.changes || []).length) {
+    const revised = await wea.reviseKnowledgeProposal({
+      proposalId: proposal.proposal_id,
+      expectedVersion: proposal.version,
+      includedChangeIds,
+    });
+    if (!revised || !revised.ok) {
+      toast('修订提案失败：' + ((revised && revised.error) || '版本冲突'), 'err');
+      await loadInbox();
+      return;
+    }
+    proposal = revised.proposal;
+  }
+  const result = await wea.applyKnowledgeProposal({
+    projectPath: proposal.project_path,
+    proposalId: proposal.proposal_id,
+    expectedVersion: proposal.version,
+  });
+  if (!result || !result.ok) {
+    const stale = result && (result.kind === 'stale' || result.kind === 'apply_conflict');
+    toast(stale ? '提案已过期，请刷新后重新生成' : '应用失败：' + ((result && result.error) || ''), 'err');
+    await loadInbox();
+    return;
+  }
+  toast(result.kind === 'applied_index_warning' ? '已应用；搜索索引稍后恢复' : '知识提案已应用', 'ok');
+  await Promise.all([loadInbox(), refreshCurrent()]);
+}
+
+async function confirmKnowledgeDocument(button) {
+  const proposal = findKnowledgeProposal(button.dataset.proposalId);
+  if (!proposal) return;
+  button.disabled = true;
+  const result = await wea.applyKnowledgeDocument({
+    projectPath: proposal.project_path,
+    proposalId: proposal.proposal_id,
+    expectedVersion: proposal.version,
+  });
+  toast(result && result.ok ? '模块文档已创建' : '模块文档未创建：' + ((result && result.error) || ''),
+    result && result.ok ? 'ok' : 'err');
+  await loadInbox();
+}
+
+async function rejectKnowledgeProposal(button) {
+  const proposal = findKnowledgeProposal(button.dataset.proposalId);
+  if (!proposal) return;
+  button.disabled = true;
+  const result = await wea.rejectKnowledgeProposal({
+    proposalId: proposal.proposal_id,
+    expectedVersion: proposal.version,
+  });
+  toast(result && result.ok ? '提案已拒绝并保留审计记录' : '拒绝失败', result && result.ok ? 'info' : 'err');
+  await loadInbox();
+}
+
+async function retryKnowledgeJob(button) {
+  button.disabled = true;
+  const result = await wea.retryKnowledgeJob({
+    jobId: button.dataset.jobId,
+    expectedVersion: Number(button.dataset.version),
+  });
+  toast(result && result.ok ? '任务已重试' : '重试失败', result && result.ok ? 'info' : 'err');
+  await loadInbox();
+}
+
+async function regenerateKnowledgeProposal(button) {
+  const proposal = findKnowledgeProposal(button.dataset.proposalId);
+  if (!proposal) return;
+  button.disabled = true;
+  await startDirectedKnowledge(
+    proposal.project_path,
+    (proposal.source_events || []).map((event) => event.event_id),
+    proposal.proposal_id
+  );
+}
+
 // ---- today summary ---------------------------------------------------------
 
 async function refreshActionSummary() {
   try {
-    const result = await wea.listCaptures();
+    const [result, knowledge] = await Promise.all([
+      wea.listCaptures(),
+      wea.getKnowledgeState(null),
+    ]);
     state.inboxCards = result && result.ok ? (result.cards || []) : [];
+    state.knowledgeState = knowledge && knowledge.ok
+      ? knowledge : { jobs: [], proposals: [], runs: [] };
   } catch (_) {
     state.inboxCards = [];
+    state.knowledgeState = { jobs: [], proposals: [], runs: [] };
   }
   renderActionSummary();
 }
 
 function renderActionSummary() {
-  const pending = (state.inboxCards || []).filter((card) => card.state === 'needs_confirmation').length;
+  const capturePending = (state.inboxCards || []).filter((card) => card.state === 'needs_confirmation').length;
+  const knowledgePending = (state.knowledgeState.proposals || [])
+    .filter((proposal) => proposal.state === 'needs_confirmation').length;
+  const pending = capturePending + knowledgePending;
   const open = ((state.tasksData && state.tasksData.items) || [])
     .flatMap((item) => item.tasks || [])
     .filter((task) => task.status === 'in_progress').length;
@@ -903,6 +1146,14 @@ function openSettingsModal() {
   $('#settings-hotkey').value = (state.config && state.config.hotkey) || 'CommandOrControl+Shift+Space';
   $('#settings-main-hotkey').value = (state.config && state.config.mainHotkey) || 'CommandOrControl+Shift+M';
   $('#settings-model').value = (state.config && state.config.opencodeModel) || '';
+  const synthesisSchedule = (state.config && state.config.synthesisSchedule) || {};
+  $('#settings-knowledge-daily-enabled').checked = synthesisSchedule.dailyEnabled !== false;
+  $('#settings-knowledge-daily-time').value = synthesisSchedule.dailyTime || '23:30';
+  $('#settings-knowledge-weekly-enabled').checked = synthesisSchedule.weeklyEnabled !== false;
+  $('#settings-knowledge-weekly-day').value = String(
+    synthesisSchedule.weeklyDay === undefined ? 5 : synthesisSchedule.weeklyDay
+  );
+  $('#settings-knowledge-weekly-time').value = synthesisSchedule.weeklyTime || '18:00';
   $('#settings-error').classList.add('hidden');
   $('#settings-modal').classList.remove('hidden');
   bindAcceleratorCapture($('#settings-hotkey'));
@@ -923,7 +1174,20 @@ async function saveSettings() {
   const mainHotkey = mainAcceleratorInput.value.trim();
   if (!hotkey || !mainHotkey) { showSettingsError('两个快捷键都不能为空'); return; }
   if (hotkey === mainHotkey) { showSettingsError('快速捕获和主窗口不能使用同一个快捷键'); return; }
-  const patch = { hotkey, mainHotkey, opencodeModel: $('#settings-model').value.trim() };
+  const existingSchedule = (state.config && state.config.synthesisSchedule) || {};
+  const patch = {
+    hotkey,
+    mainHotkey,
+    opencodeModel: $('#settings-model').value.trim(),
+    synthesisSchedule: {
+      ...existingSchedule,
+      dailyEnabled: $('#settings-knowledge-daily-enabled').checked,
+      dailyTime: $('#settings-knowledge-daily-time').value || '23:30',
+      weeklyEnabled: $('#settings-knowledge-weekly-enabled').checked,
+      weeklyDay: Number($('#settings-knowledge-weekly-day').value),
+      weeklyTime: $('#settings-knowledge-weekly-time').value || '18:00',
+    },
+  };
   if (state.settingsWorkspace) patch.workspace = state.settingsWorkspace;
   $('#settings-save').disabled = true;
   try {

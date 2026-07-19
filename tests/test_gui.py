@@ -35,6 +35,16 @@ from workeventagent.gui import (
     handle_search,
 )
 from workeventagent.project_schema import parse_timeline_events
+from workeventagent.inbox_store import list_captures, update_capture
+from workeventagent.knowledge_store import (
+    enqueue_job,
+    get_job,
+    get_proposal,
+    job_id_for,
+    list_jobs,
+    list_proposals as list_knowledge_proposals,
+    transition_job,
+)
 
 from workeventagent.search_store import search_workspace
 from workeventagent.markdown_store import write_project_atomically
@@ -1547,6 +1557,7 @@ class UpdateTaskTest(unittest.TestCase):
             self.assertTrue(result["ok"])
             after = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
             self.assertEqual(after[0]["status"], "done")
+            self.assertEqual(list_jobs(ws), [], "manual task status must not enqueue synthesis")
         finally:
             tmp.cleanup()
 
@@ -2132,6 +2143,809 @@ class InboxHandlerTests(unittest.TestCase):
             self.assertTrue(result["ok"], str(result))
             pending_dir = ws / ".workeventagent" / "pending" / created["card"]["capture_id"]
             self.assertFalse(pending_dir.exists())
+
+
+class PhaseBImpactCommitTest(unittest.TestCase):
+    def _setup_confirmed_card(self, workspace: Path, *, impact_level: str) -> tuple[dict, Path]:
+        initialized = handle_init({
+            "workspace": str(workspace),
+            "title": "Impact Test",
+            "project_id": "impact-test",
+            "items": [{"title": "Item A", "tasks": ["Task 1"]}],
+            "db_path": str(workspace / "index.sqlite"),
+        })
+        project = Path(initialized["project_path"])
+        task_id = handle_tasks({"project_path": str(project)})["items"][0]["tasks"][0]["task_id"]
+        created = handle_inbox_create({"workspace": str(workspace), "text": "scope changed", "attachments": []})
+        proposal = {
+            "target": {
+                "project_id": "impact-test",
+                "item_id": "item-a",
+                "task_id": task_id,
+                "task_title": "",
+                "new_item": False,
+                "new_task": False,
+            },
+            "confidence": 0.96,
+            "reason": "Matched",
+            "event": {
+                "event_id": "20260720-083000000-task-1",
+                "task_id": task_id,
+                "input_text": "Project scope changed.",
+                "summary": "Scope now includes recovery.",
+                "status": "in_progress",
+                "next_action": "Implement recovery.",
+            },
+            "attachment_paths": [],
+        }
+        impact = {
+            "level": impact_level,
+            "dimensions": ["scope"] if impact_level == "high" else [],
+            "reason": "Project scope changed." if impact_level == "high" else "Task evidence only.",
+        }
+        card = update_capture(
+            workspace,
+            created["card"]["capture_id"],
+            {
+                "state": "needs_confirmation",
+                "proposal": proposal,
+                "selected_project": {"project_id": "impact-test", "path": str(project)},
+                "knowledge_impact": impact,
+            },
+        )
+        return card, project
+
+    @patch("workeventagent.gui.run_archivist")
+    def test_propose_exposes_high_impact_before_confirmation(self, run_archivist):
+        run_archivist.return_value = """{
+          "target": {"project_id": "multimodal-labeling", "item_id": "kv-cache-few-shot", "task_id": "kv-cache-blockers"},
+          "confidence": 0.91,
+          "reason": "Matched.",
+          "event": {"task_id": "kv-cache-blockers", "input_text": "input", "summary": "summary", "status": "in_progress", "next_action": "next"},
+          "knowledge_impact": {"level": "high", "dimensions": ["architecture"], "reason": "Architecture changed."}
+        }"""
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            project.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+            result = handle_propose({"text": "architecture changed", "project_path": str(project)})
+
+        self.assertEqual(result["knowledge_impact"]["level"], "high")
+        self.assertEqual(result["knowledge_impact"]["dimensions"], ["architecture"])
+
+    def test_ordinary_capture_commit_creates_no_knowledge_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, _project = self._setup_confirmed_card(workspace, impact_level="ordinary")
+
+            result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            self.assertTrue(result["ok"], str(result))
+            self.assertEqual(list_jobs(workspace), [])
+            self.assertNotIn("knowledge_job_id", result)
+
+    def test_high_impact_job_exists_before_project_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, _project = self._setup_confirmed_card(workspace, impact_level="high")
+            event_id = card["proposal"]["event"]["event_id"]
+            expected_job_id = job_id_for(f"high-impact:impact-test:{event_id}")
+
+            def stop_after_check(_request):
+                self.assertEqual(get_job(workspace, expected_job_id)["state"], "awaiting_source")
+                raise RuntimeError("stop after order assertion")
+
+            with patch("workeventagent.gui.handle_commit", side_effect=stop_after_check):
+                result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(get_job(workspace, expected_job_id)["state"], "awaiting_source")
+
+    def test_high_impact_job_uses_frontmatter_project_id_not_agent_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, _project = self._setup_confirmed_card(workspace, impact_level="high")
+            card["proposal"]["target"]["project_id"] = "agent-forged-id"
+            update_capture(workspace, card["capture_id"], {"proposal": card["proposal"]})
+
+            result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            event_id = card["proposal"]["event"]["event_id"]
+            trusted_job = get_job(workspace, job_id_for(f"high-impact:impact-test:{event_id}"))
+            self.assertTrue(result["ok"], str(result))
+            self.assertEqual(trusted_job["project_id"], "impact-test")
+            self.assertFalse(any(job["project_id"] == "agent-forged-id" for job in list_jobs(workspace)))
+
+    def test_high_impact_job_is_queued_only_after_source_event_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, project = self._setup_confirmed_card(workspace, impact_level="high")
+
+            result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            event_id = card["proposal"]["event"]["event_id"]
+            job_id = job_id_for(f"high-impact:impact-test:{event_id}")
+            self.assertTrue(result["ok"], str(result))
+            self.assertEqual(result["knowledge_job_id"], job_id)
+            self.assertEqual(get_job(workspace, job_id)["state"], "queued")
+            self.assertIn(event_id, {event["event_id"] for event in parse_timeline_events(project.read_text(encoding="utf-8"))})
+
+    def test_failed_project_commit_leaves_visible_recoverable_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, _project = self._setup_confirmed_card(workspace, impact_level="high")
+            event_id = card["proposal"]["event"]["event_id"]
+            job_id = job_id_for(f"high-impact:impact-test:{event_id}")
+
+            with patch("workeventagent.gui.handle_commit", side_effect=OSError("disk full")):
+                result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(get_job(workspace, job_id)["state"], "awaiting_source")
+
+    def test_commit_returns_and_inbox_archives_real_event_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, _project = self._setup_confirmed_card(workspace, impact_level="ordinary")
+            event_id = card["proposal"]["event"]["event_id"]
+
+            result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            self.assertTrue(result["ok"], str(result))
+            archived = next(item for item in list_captures(workspace) if item["capture_id"] == card["capture_id"])
+            self.assertEqual(archived["event_id"], event_id)
+
+
+class PhaseBKnowledgeHandlersTest(unittest.TestCase):
+    _setup_confirmed_card = PhaseBImpactCommitTest._setup_confirmed_card
+
+    def _setup_project(self, workspace: Path, *, split_dates: bool = False) -> Path:
+        text = Path("tests/fixtures/project-v2.md").read_text(encoding="utf-8")
+        if split_dates:
+            text = text.replace("2026-07-13T11:00:00+08:00", "2026-07-14T11:00:00+08:00")
+        project = workspace / "report-project.md"
+        project.write_text(text, encoding="utf-8")
+        return project
+
+    @staticmethod
+    def _agent_output(*targets: str, with_document: bool = False) -> str:
+        changes = []
+        for target in targets:
+            paragraph = (
+                "Retain this architecture summary."
+                if target == "technical-overview" and with_document
+                else f"Updated {target}."
+            )
+            changes.append({
+                "target_section": target,
+                "reason": "Evidence supports this update.",
+                "content": {"paragraphs": [paragraph], "bullets": []},
+            })
+        suggestion = None
+        if with_document:
+            suggestion = {
+                "purpose": "Explain architecture in depth.",
+                "title": "Architecture",
+                "retained_summary": "Retain this architecture summary.",
+                "module_conclusion": {"paragraphs": ["Architecture conclusion."], "bullets": []},
+                "module_body": {"paragraphs": ["Architecture body."], "bullets": []},
+            }
+        return json.dumps({"changes": changes, "document_suggestion": suggestion})
+
+    def test_directed_enqueue_rejects_cross_project_or_missing_events(self):
+        from workeventagent import gui as gui_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            ok = gui_module.handle_knowledge_enqueue({
+                "workspace": str(workspace), "trigger": "directed",
+                "project_path": str(project), "event_ids": ["event-b", "event-a"],
+            })
+            missing = gui_module.handle_knowledge_enqueue({
+                "workspace": str(workspace), "trigger": "directed",
+                "project_path": str(project), "event_ids": ["other-project-event"],
+            })
+            outside = workspace.parent / "outside.md"
+            outside.write_text(project.read_text(encoding="utf-8"), encoding="utf-8")
+            cross = gui_module.handle_knowledge_enqueue({
+                "workspace": str(workspace), "trigger": "directed",
+                "project_path": str(outside), "event_ids": ["event-a"],
+            })
+
+            self.assertTrue(ok["ok"], str(ok))
+            self.assertEqual(ok["job"]["source_event_ids"], ["event-b", "event-a"])
+            self.assertFalse(missing["ok"])
+            self.assertFalse(cross["ok"])
+
+    def test_high_impact_process_requires_committed_source(self):
+        from workeventagent import gui as gui_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            job = enqueue_job(workspace, {
+                "idempotency_key": "high-impact:report-project:event-missing",
+                "state": "awaiting_source", "project_id": "report-project",
+                "project_path": str(project), "trigger": "high_impact",
+                "source_event_ids": ["event-missing"],
+            })
+
+            result = gui_module.handle_knowledge_process_job({"workspace": str(workspace), "job_id": job["job_id"]})
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(get_job(workspace, job["job_id"])["state"], "awaiting_source")
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_daily_job_selects_only_local_date_range_evidence(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        run_synthesizer.return_value = self._agent_output("current-panorama")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace, split_dates=True)
+            job = enqueue_job(workspace, {
+                "idempotency_key": "daily:report-project:2026-07-13", "state": "queued",
+                "project_id": "report-project", "project_path": str(project), "trigger": "daily",
+                "source_event_ids": [], "date_from": "2026-07-13", "date_to": "2026-07-13",
+            })
+
+            result = gui_module.handle_knowledge_process_job({"workspace": str(workspace), "job_id": job["job_id"]})
+
+            self.assertTrue(result["ok"], str(result))
+            prompt = run_synthesizer.call_args.args[0]
+            self.assertIn("event-a", prompt)
+            self.assertNotIn("event-b", prompt)
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_job_consumer_rejects_project_id_that_does_not_match_frontmatter(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            job = enqueue_job(workspace, {
+                "idempotency_key": "directed:agent-forged-id:event-a",
+                "state": "queued",
+                "project_id": "agent-forged-id",
+                "project_path": str(project),
+                "trigger": "directed",
+                "source_event_ids": ["event-a"],
+            })
+
+            result = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": job["job_id"]
+            })
+
+            self.assertFalse(result["ok"])
+            self.assertIn("project identity", result["error"])
+            self.assertEqual(get_job(workspace, job["job_id"])["state"], "failed")
+            run_synthesizer.assert_not_called()
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_job_consumer_rejects_project_path_outside_workspace(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            outside = root / "outside.md"
+            outside.write_text(Path("tests/fixtures/project-v2.md").read_text(encoding="utf-8"), encoding="utf-8")
+            job = enqueue_job(workspace, {
+                "idempotency_key": "directed:outside:event-a",
+                "state": "queued",
+                "project_id": "report-project",
+                "project_path": str(outside),
+                "trigger": "directed",
+                "source_event_ids": ["event-a"],
+            })
+
+            result = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": job["job_id"]
+            })
+
+            self.assertFalse(result["ok"])
+            self.assertIn("inside workspace", result["error"])
+            run_synthesizer.assert_not_called()
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_weekly_job_runs_full_review_prompt_with_week_evidence(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        run_synthesizer.return_value = self._agent_output("current-panorama", "technical-overview", "project-knowledge")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            job = enqueue_job(workspace, {
+                "idempotency_key": "weekly:report-project:2026-W29", "state": "queued",
+                "project_id": "report-project", "project_path": str(project), "trigger": "weekly",
+                "source_event_ids": [], "date_from": "2026-07-13", "date_to": "2026-07-19",
+            })
+
+            result = gui_module.handle_knowledge_process_job({"workspace": str(workspace), "job_id": job["job_id"]})
+
+            self.assertTrue(result["ok"], str(result))
+            prompt = run_synthesizer.call_args.args[0]
+            self.assertIn("full Phase B review", prompt)
+            self.assertIn("event-a", prompt)
+            self.assertIn("event-b", prompt)
+
+    def test_schedule_enqueue_persists_full_project_manifest_before_children(self):
+        from workeventagent import gui as gui_module
+        from workeventagent.knowledge_store import ensure_schedule_children as real_ensure
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            first = self._setup_project(workspace)
+            second = workspace / "second.md"
+            second.write_text(
+                first.read_text(encoding="utf-8").replace("project_id: report-project", "project_id: second"),
+                encoding="utf-8",
+            )
+
+            def assert_manifest_then_enqueue(ws, run_id):
+                run_path = ws / ".workeventagent" / "knowledge" / "runs" / f"{run_id}.json"
+                self.assertTrue(run_path.exists())
+                self.assertEqual(len(json.loads(run_path.read_text(encoding="utf-8"))["expected_children"]), 2)
+                return real_ensure(ws, run_id)
+
+            with patch("workeventagent.knowledge_store.ensure_schedule_children", side_effect=assert_manifest_then_enqueue):
+                result = gui_module.handle_knowledge_enqueue_schedule({
+                    "workspace": str(workspace), "cadence": "daily", "schedule_key": "2026-07-20",
+                    "date_from": "2026-07-20", "date_to": "2026-07-20",
+                    "range_start_utc": "2026-07-19T16:00:00.000Z",
+                    "range_end_utc": "2026-07-20T16:00:00.000Z",
+                })
+
+            self.assertTrue(result["ok"], str(result))
+            self.assertEqual(len(result["run"]["expected_children"]), 2)
+            for child in result["run"]["expected_children"]:
+                self.assertEqual(child["job_spec"]["range_start_utc"], "2026-07-19T16:00:00.000Z")
+                self.assertEqual(child["job_spec"]["range_end_utc"], "2026-07-20T16:00:00.000Z")
+
+    def test_schedule_recovery_completes_missing_children_after_partial_enqueue(self):
+        from workeventagent import gui as gui_module
+        from workeventagent.knowledge_store import create_schedule_run
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            first = self._setup_project(workspace)
+            second = workspace / "second.md"
+            second.write_text(
+                first.read_text(encoding="utf-8").replace("project_id: report-project", "project_id: second"),
+                encoding="utf-8",
+            )
+            run = create_schedule_run(
+                workspace, "daily", "2026-07-20",
+                [{"project_id": "report-project", "project_path": str(first)},
+                 {"project_id": "second", "project_path": str(second)}],
+            )
+            enqueue_job(workspace, run["expected_children"][0]["job_spec"])
+
+            result = gui_module.handle_knowledge_recover({"workspace": str(workspace)})
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(len(list_jobs(workspace)), 2)
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_process_persists_proposal_before_completing_job(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+        from workeventagent.knowledge_store import transition_job as real_transition
+
+        run_synthesizer.return_value = self._agent_output("current-panorama")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            enqueued = gui_module.handle_knowledge_enqueue({
+                "workspace": str(workspace), "trigger": "directed",
+                "project_path": str(project), "event_ids": ["event-a"],
+            })
+
+            def assert_before_complete(ws, job_id, expected_version, from_states, to_state, patch=None):
+                if to_state == "completed":
+                    self.assertGreater(len(list_knowledge_proposals(ws)), 0)
+                return real_transition(ws, job_id, expected_version, from_states, to_state, patch)
+
+            with patch("workeventagent.gui.transition_job", side_effect=assert_before_complete):
+                result = gui_module.handle_knowledge_process_job({
+                    "workspace": str(workspace), "job_id": enqueued["job"]["job_id"]
+                })
+
+            self.assertTrue(result["ok"], str(result))
+
+    @patch("workeventagent.gui.run_project_synthesizer", side_effect=RuntimeError("agent down"))
+    def test_agent_failure_marks_job_failed_and_leaves_project_unchanged(self, _run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            before = project.read_bytes()
+            enqueued = gui_module.handle_knowledge_enqueue({
+                "workspace": str(workspace), "trigger": "directed",
+                "project_path": str(project), "event_ids": ["event-a"],
+            })
+
+            result = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": enqueued["job"]["job_id"]
+            })
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(get_job(workspace, enqueued["job"]["job_id"])["state"], "failed")
+            self.assertEqual(project.read_bytes(), before)
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_no_evidence_and_no_change_are_explicit_terminal_states(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        run_synthesizer.return_value = self._agent_output()
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            no_evidence = enqueue_job(workspace, {
+                "idempotency_key": "daily:none", "state": "queued", "project_id": "report-project",
+                "project_path": str(project), "trigger": "daily", "source_event_ids": [],
+                "date_from": "2026-07-20", "date_to": "2026-07-20",
+            })
+            no_change = enqueue_job(workspace, {
+                "idempotency_key": "directed:no-change", "state": "queued", "project_id": "report-project",
+                "project_path": str(project), "trigger": "directed", "source_event_ids": ["event-a"],
+            })
+
+            first = gui_module.handle_knowledge_process_job({"workspace": str(workspace), "job_id": no_evidence["job_id"]})
+            second = gui_module.handle_knowledge_process_job({"workspace": str(workspace), "job_id": no_change["job_id"]})
+
+            self.assertEqual(first["job"]["state"], "skipped_no_evidence")
+            self.assertEqual(second["job"]["state"], "skipped_no_change")
+
+    def test_retry_is_explicit_idempotent_and_cas_guarded(self):
+        from workeventagent import gui as gui_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            job = enqueue_job(workspace, {
+                "idempotency_key": "directed:failed", "state": "queued", "project_id": "report-project",
+                "project_path": str(project), "trigger": "directed", "source_event_ids": ["event-a"],
+            })
+            job = transition_job(workspace, job["job_id"], 1, {"queued"}, "processing")
+            job = transition_job(workspace, job["job_id"], 2, {"processing"}, "failed")
+
+            retried = gui_module.handle_knowledge_retry_job({
+                "workspace": str(workspace), "job_id": job["job_id"], "expected_version": job["version"]
+            })
+            stale = gui_module.handle_knowledge_retry_job({
+                "workspace": str(workspace), "job_id": job["job_id"], "expected_version": job["version"]
+            })
+
+            self.assertTrue(retried["ok"])
+            self.assertFalse(stale["ok"])
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_knowledge_state_aggregates_jobs_and_proposals_without_capture_retention(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        run_synthesizer.return_value = self._agent_output("current-panorama")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            enqueued = gui_module.handle_knowledge_enqueue({
+                "workspace": str(workspace), "trigger": "directed", "project_path": str(project),
+                "event_ids": ["event-a"],
+            })
+            gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": enqueued["job"]["job_id"]
+            })
+
+            state = gui_module.handle_knowledge_state({"workspace": str(workspace)})
+
+            self.assertTrue(state["ok"])
+            self.assertEqual(len(state["jobs"]), 1)
+            self.assertEqual(len(state["proposals"]), 1)
+            self.assertNotIn("captures", state)
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_document_suggestion_is_persisted_as_separate_confirmation(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        run_synthesizer.return_value = self._agent_output("technical-overview", with_document=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            enqueued = gui_module.handle_knowledge_enqueue({
+                "workspace": str(workspace), "trigger": "directed", "project_path": str(project),
+                "event_ids": ["event-a"],
+            })
+
+            result = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": enqueued["job"]["job_id"]
+            })
+
+            self.assertTrue(result["ok"], str(result))
+            proposals = list_knowledge_proposals(workspace)
+            self.assertEqual({item["proposal_kind"] for item in proposals}, {"section_bundle", "module_document"})
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_unicode_title_line_separators_fail_before_proposal_persistence(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        for separator in ("\u0085", "\u2028", "\u2029"):
+            with self.subTest(separator=ascii(separator)), tempfile.TemporaryDirectory() as tmp:
+                workspace = Path(tmp)
+                project = self._setup_project(workspace)
+                output = json.loads(self._agent_output("technical-overview", with_document=True))
+                output["document_suggestion"]["title"] = f"Architecture{separator}---"
+                run_synthesizer.return_value = json.dumps(output)
+                enqueued = gui_module.handle_knowledge_enqueue({
+                    "workspace": str(workspace), "trigger": "directed", "project_path": str(project),
+                    "event_ids": ["event-a"],
+                })
+
+                result = gui_module.handle_knowledge_process_job({
+                    "workspace": str(workspace), "job_id": enqueued["job"]["job_id"]
+                })
+
+                self.assertFalse(result["ok"])
+                self.assertEqual(list_knowledge_proposals(workspace), [])
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_revision_persists_subset_then_supersedes_old_with_cas(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        run_synthesizer.return_value = self._agent_output("current-panorama", "project-knowledge")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            enqueued = gui_module.handle_knowledge_enqueue({
+                "workspace": str(workspace), "trigger": "directed", "project_path": str(project),
+                "event_ids": ["event-a"],
+            })
+            processed = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": enqueued["job"]["job_id"]
+            })
+            original = get_proposal(workspace, processed["proposal_ids"][0])
+
+            revised = gui_module.handle_knowledge_revise_proposal({
+                "workspace": str(workspace), "proposal_id": original["proposal_id"],
+                "expected_version": original["version"],
+                "included_change_ids": ["change-project-knowledge"],
+            })
+            stale = gui_module.handle_knowledge_revise_proposal({
+                "workspace": str(workspace), "proposal_id": original["proposal_id"],
+                "expected_version": original["version"],
+                "included_change_ids": ["change-current-panorama"],
+            })
+
+            self.assertTrue(revised["ok"], str(revised))
+            self.assertEqual(revised["superseded"]["state"], "superseded")
+            self.assertEqual(
+                [change["change_id"] for change in revised["proposal"]["changes"]],
+                ["change-project-knowledge"],
+            )
+            self.assertFalse(stale["ok"])
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_rejection_is_cas_guarded_and_remains_auditable(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        run_synthesizer.return_value = self._agent_output("current-panorama")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            enqueued = gui_module.handle_knowledge_enqueue({
+                "workspace": str(workspace), "trigger": "directed", "project_path": str(project),
+                "event_ids": ["event-a"],
+            })
+            processed = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": enqueued["job"]["job_id"]
+            })
+            proposal = get_proposal(workspace, processed["proposal_ids"][0])
+
+            rejected = gui_module.handle_knowledge_reject_proposal({
+                "workspace": str(workspace), "proposal_id": proposal["proposal_id"],
+                "expected_version": proposal["version"],
+            })
+            stale = gui_module.handle_knowledge_reject_proposal({
+                "workspace": str(workspace), "proposal_id": proposal["proposal_id"],
+                "expected_version": proposal["version"],
+            })
+
+            self.assertTrue(rejected["ok"])
+            self.assertEqual(get_proposal(workspace, proposal["proposal_id"])["state"], "rejected")
+            self.assertFalse(stale["ok"])
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_apply_handler_uses_durable_proposal_and_marks_applied(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        run_synthesizer.return_value = self._agent_output("current-panorama")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            enqueued = gui_module.handle_knowledge_enqueue({
+                "workspace": str(workspace), "trigger": "directed", "project_path": str(project),
+                "event_ids": ["event-a"],
+            })
+            processed = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": enqueued["job"]["job_id"]
+            })
+            proposal = get_proposal(workspace, processed["proposal_ids"][0])
+            job_ids_before_apply = [job["job_id"] for job in list_jobs(workspace)]
+
+            result = gui_module.handle_knowledge_apply_proposal({
+                "workspace": str(workspace), "project_path": str(project),
+                "db_path": str(workspace / "index.sqlite"), "proposal_id": proposal["proposal_id"],
+                "expected_version": proposal["version"], "today": "2026-07-20",
+            })
+
+            self.assertTrue(result["ok"], str(result))
+            self.assertEqual(get_proposal(workspace, proposal["proposal_id"])["state"], "applied")
+            self.assertEqual(
+                [job["job_id"] for job in list_jobs(workspace)],
+                job_ids_before_apply,
+                "applying synthesis must not trigger another synthesis job",
+            )
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_stale_proposal_regeneration_gets_new_idempotent_job(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+        from workeventagent.knowledge_store import transition_proposal as durable_transition
+
+        run_synthesizer.return_value = self._agent_output("current-panorama")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            request = {
+                "workspace": str(workspace), "trigger": "directed",
+                "project_path": str(project), "event_ids": ["event-a"],
+            }
+            original = gui_module.handle_knowledge_enqueue(request)
+            processed = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": original["job"]["job_id"]
+            })
+            proposal = get_proposal(workspace, processed["proposal_ids"][0])
+            durable_transition(
+                workspace, proposal["proposal_id"], proposal["version"],
+                {"needs_confirmation"}, "stale",
+            )
+
+            regenerated = gui_module.handle_knowledge_enqueue({
+                **request, "regenerate_of": proposal["proposal_id"]
+            })
+            repeated = gui_module.handle_knowledge_enqueue({
+                **request, "regenerate_of": proposal["proposal_id"]
+            })
+
+            self.assertTrue(regenerated["ok"])
+            self.assertEqual(regenerated["job"]["state"], "queued")
+            self.assertNotEqual(regenerated["job"]["job_id"], original["job"]["job_id"])
+            self.assertEqual(repeated["job"]["job_id"], regenerated["job"]["job_id"])
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_document_apply_handler_requires_separate_confirmation(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+
+        run_synthesizer.return_value = self._agent_output("technical-overview", with_document=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            enqueued = gui_module.handle_knowledge_enqueue({
+                "workspace": str(workspace), "trigger": "directed", "project_path": str(project),
+                "event_ids": ["event-a"],
+            })
+            processed = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": enqueued["job"]["job_id"]
+            })
+            proposals = [get_proposal(workspace, proposal_id) for proposal_id in processed["proposal_ids"]]
+            section = next(item for item in proposals if item["proposal_kind"] == "section_bundle")
+            document = next(item for item in proposals if item["proposal_kind"] == "module_document")
+            gui_module.handle_knowledge_apply_proposal({
+                "workspace": str(workspace), "project_path": str(project),
+                "db_path": str(workspace / "index.sqlite"), "proposal_id": section["proposal_id"],
+                "expected_version": section["version"], "today": "2026-07-20",
+            })
+
+            result = gui_module.handle_knowledge_apply_document({
+                "workspace": str(workspace), "project_path": str(project),
+                "proposal_id": document["proposal_id"], "expected_version": document["version"],
+                "today": "2026-07-20",
+            })
+
+            self.assertTrue(result["ok"], str(result))
+            self.assertTrue((workspace / document["target_path"]).is_file())
+
+    @patch("workeventagent.gui.run_project_synthesizer")
+    def test_knowledge_recover_reconciles_applying_proposals_before_state(self, run_synthesizer):
+        from workeventagent import gui as gui_module
+        from workeventagent.knowledge_store import transition_proposal as durable_transition
+
+        run_synthesizer.return_value = self._agent_output("current-panorama")
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            project = self._setup_project(workspace)
+            enqueued = gui_module.handle_knowledge_enqueue({
+                "workspace": str(workspace), "trigger": "directed", "project_path": str(project),
+                "event_ids": ["event-a"],
+            })
+            processed = gui_module.handle_knowledge_process_job({
+                "workspace": str(workspace), "job_id": enqueued["job"]["job_id"]
+            })
+            proposal = get_proposal(workspace, processed["proposal_ids"][0])
+            durable_transition(
+                workspace, proposal["proposal_id"], proposal["version"], {"needs_confirmation"}, "applying"
+            )
+
+            recovered = gui_module.handle_knowledge_recover({"workspace": str(workspace)})
+
+            self.assertTrue(recovered["ok"])
+            self.assertIn(proposal["proposal_id"], recovered["recovered_proposal_ids"])
+            self.assertEqual(get_proposal(workspace, proposal["proposal_id"])["state"], "applied")
+
+    def test_retry_same_event_id_and_content_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            db = Path(tmp) / "index.sqlite"
+            project.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+            proposal = _make_mock_proposal_data()
+            first = handle_commit({"proposal": proposal, "project_path": str(project), "db_path": str(db)})
+            after_first = project.read_text(encoding="utf-8")
+
+            second = handle_commit({"proposal": proposal, "project_path": str(project), "db_path": str(db)})
+
+            self.assertTrue(first["ok"] and second["ok"])
+            self.assertTrue(second["idempotent"])
+            self.assertEqual(project.read_text(encoding="utf-8"), after_first)
+            self.assertEqual(after_first.count(f"<!-- event:{proposal['event']['event_id']} -->"), 1)
+
+    def test_retry_same_event_id_with_different_content_is_hard_conflict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project.md"
+            db = Path(tmp) / "index.sqlite"
+            project.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+            proposal = _make_mock_proposal_data()
+            handle_commit({"proposal": proposal, "project_path": str(project), "db_path": str(db)})
+            before = project.read_text(encoding="utf-8")
+            conflicting = _make_mock_proposal_data({"event": {"summary": "Different meaning."}})
+
+            result = handle_commit({"proposal": conflicting, "project_path": str(project), "db_path": str(db)})
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["kind"], "event_id_conflict")
+            self.assertEqual(project.read_text(encoding="utf-8"), before)
+
+    def test_startup_recovers_event_written_before_inbox_archive_and_job_promote(self):
+        from workeventagent.gui import handle_knowledge_recover
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, project = self._setup_confirmed_card(workspace, impact_level="high")
+            event_id = card["proposal"]["event"]["event_id"]
+            job = enqueue_job(
+                workspace,
+                {
+                    "idempotency_key": f"high-impact:impact-test:{event_id}",
+                    "state": "awaiting_source",
+                    "project_id": "impact-test",
+                    "project_path": str(project),
+                    "trigger": "high_impact",
+                    "source_event_ids": [event_id],
+                    "capture_id": card["capture_id"],
+                },
+            )
+            committed = handle_commit({
+                "proposal": card["proposal"],
+                "project_path": str(project),
+                "db_path": str(workspace / "index.sqlite"),
+            })
+            self.assertTrue(committed["ok"])
+
+            recovered = handle_knowledge_recover({"workspace": str(workspace)})
+
+            self.assertTrue(recovered["ok"])
+            self.assertEqual(get_job(workspace, job["job_id"])["state"], "queued")
+            archived = next(item for item in list_captures(workspace) if item["capture_id"] == card["capture_id"])
+            self.assertEqual(archived["state"], "archived")
+            self.assertEqual(archived["event_id"], event_id)
 
 
 class SearchHandlerTests(unittest.TestCase):

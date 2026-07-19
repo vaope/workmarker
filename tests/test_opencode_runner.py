@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 import unittest
@@ -7,11 +8,137 @@ from unittest.mock import patch
 from workeventagent.opencode_runner import (
     OpencodeRunnerError,
     parse_archivist_output,
+    parse_knowledge_impact,
     parse_project_route_output,
+    parse_synthesis_output,
     run_archivist,
+    run_project_synthesizer,
     run_project_router,
     run_reporter,
 )
+
+
+class KnowledgeImpactParserTest(unittest.TestCase):
+    def test_valid_ordinary_and_high_objects_parse(self):
+        ordinary = parse_knowledge_impact(
+            '{"knowledge_impact":{"level":"ordinary","dimensions":[],"reason":"Task evidence only."}}'
+        )
+        high = parse_knowledge_impact(
+            '{"knowledge_impact":{"level":"high","dimensions":["architecture","risk"],"reason":"Architecture changed."}}'
+        )
+
+        self.assertEqual(ordinary, {"level": "ordinary", "dimensions": [], "reason": "Task evidence only."})
+        self.assertEqual(
+            high,
+            {"level": "high", "dimensions": ["architecture", "risk"], "reason": "Architecture changed."},
+        )
+
+    def test_invalid_or_missing_impact_fails_closed_to_ordinary(self):
+        invalid_values = [
+            "{}",
+            '{"knowledge_impact":{"level":"urgent","dimensions":[],"reason":"x"}}',
+            '{"knowledge_impact":{"level":"high","dimensions":["status"],"reason":"x"}}',
+            '{"knowledge_impact":{"level":"high","dimensions":["goal"],"reason":""}}',
+            '{"knowledge_impact":{"level":"high","dimensions":[],"reason":"Goal changed"}}',
+        ]
+
+        for raw in invalid_values:
+            with self.subTest(raw=raw):
+                result = parse_knowledge_impact(raw)
+                self.assertEqual(result["level"], "ordinary")
+                self.assertEqual(result["dimensions"], [])
+                self.assertTrue(result["reason"])
+
+    def test_agent_owned_ids_are_ignored(self):
+        result = parse_knowledge_impact(
+            '{"knowledge_impact":{"level":"high","dimensions":["scope"],"reason":"Scope changed",'
+            '"source_event_ids":["agent-event"],"job_id":"agent-job"}}'
+        )
+
+        self.assertEqual(set(result), {"level", "dimensions", "reason"})
+
+    def test_done_without_supported_dimension_is_ordinary(self):
+        result = parse_knowledge_impact(
+            '{"event":{"status":"done"},"knowledge_impact":{"level":"high","dimensions":[],"reason":"Task done"}}'
+        )
+
+        self.assertEqual(result["level"], "ordinary")
+
+
+class ProjectSynthesizerRunnerTest(unittest.TestCase):
+    @patch("workeventagent.opencode_runner.subprocess.run")
+    def test_runner_selects_synthesizer_file_model_json_timeout_and_no_stdin(self, run):
+        run.return_value.stdout = '{"changes":[],"document_suggestion":null}'
+        run.return_value.returncode = 0
+
+        output = run_project_synthesizer(
+            "prompt", Path("project.md"), opencode_bin="opencode", model="provider/model"
+        )
+
+        self.assertIn('"changes"', output)
+        args = run.call_args.args[0]
+        self.assertEqual(args[args.index("--agent") + 1], "workevent-synthesizer")
+        self.assertEqual(args[args.index("--file") + 1], "project.md")
+        self.assertEqual(args[args.index("--model") + 1], "provider/model")
+        self.assertEqual(args[args.index("--format") + 1], "json")
+        self.assertEqual(run.call_args.kwargs["timeout"], 600)
+        self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_parser_accepts_bounded_output(self):
+        parsed = parse_synthesis_output(
+            '{"changes":[{"target_section":"current-panorama","reason":"Evidence changed",'
+            '"content":{"paragraphs":["Now."],"bullets":["Next."]}}],"document_suggestion":null}'
+        )
+
+        self.assertEqual(parsed["changes"][0]["target_section"], "current-panorama")
+
+    def test_parser_rejects_unknown_duplicate_or_structural_content(self):
+        invalid = [
+            '{"changes":[{"target_section":"timeline","reason":"x","content":{"paragraphs":["x"],"bullets":[]}}],"document_suggestion":null}',
+            '{"changes":[{"target_section":"current-panorama","reason":"x","content":{"paragraphs":["x"],"bullets":[]}},{"target_section":"current-panorama","reason":"y","content":{"paragraphs":["y"],"bullets":[]}}],"document_suggestion":null}',
+            '{"changes":[{"target_section":"current-panorama","reason":"x","content":"raw"}],"document_suggestion":null}',
+            '{"changes":[{"target_section":"current-panorama","reason":"x","content":{"paragraphs":["## Heading"],"bullets":[]}}],"document_suggestion":null}',
+            '{"changes":[{"target_section":"current-panorama","reason":"x","content":{"paragraphs":["<!-- comment -->"],"bullets":[]}}],"document_suggestion":null}',
+            '{"changes":[{"target_section":"current-panorama","reason":"x","content":{"paragraphs":["---"],"bullets":[]}}],"document_suggestion":null}',
+            '{"changes":[{"target_section":"current-panorama","reason":"x","content":{"paragraphs":["C:\\\\secret\\\\file.md"],"bullets":[]}}],"document_suggestion":null}',
+            '{"changes":[],"document_suggestion":[],"another_document":{}}',
+        ]
+        for raw in invalid:
+            with self.subTest(raw=raw):
+                with self.assertRaises(OpencodeRunnerError):
+                    parse_synthesis_output(raw)
+
+    def test_parser_rejects_agent_owned_identity_fields(self):
+        invalid_keys = ("filename", "module_id", "order", "project_id", "source_event_ids", "base_section_hash")
+        for key in invalid_keys:
+            raw = (
+                '{"changes":[],"document_suggestion":{"purpose":"p","title":"Architecture",'
+                '"retained_summary":"summary","module_conclusion":{"paragraphs":["c"],"bullets":[]},'
+                '"module_body":{"paragraphs":["b"],"bullets":[]},'
+                f'"{key}":"agent-owned"}}'
+            )
+            with self.subTest(key=key):
+                with self.assertRaises(OpencodeRunnerError):
+                    parse_synthesis_output(raw)
+
+    def test_parser_rejects_all_unicode_document_title_line_separators(self):
+        for separator in ("\n", "\u0085", "\u2028", "\u2029"):
+            raw = json.dumps(
+                {
+                    "changes": [],
+                    "document_suggestion": {
+                        "purpose": "p",
+                        "title": f"Architecture{separator}extra_control: agent-owned",
+                        "retained_summary": "summary",
+                        "module_conclusion": {"paragraphs": ["c"], "bullets": []},
+                        "module_body": {"paragraphs": ["b"], "bullets": []},
+                    },
+                }
+            )
+
+            with self.subTest(separator=ascii(separator)):
+                with self.assertRaises(OpencodeRunnerError):
+                    parse_synthesis_output(raw)
 
 
 _EXAMPLE_NDJSON = """\

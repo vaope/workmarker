@@ -50,6 +50,17 @@ contextBridge.exposeInMainWorld('wea', {
   updateProjectSection: (sectionId, baseSectionHash, content, projectPath) =>
     ipcRenderer.invoke('wea:updateProjectSection', { sectionId, baseSectionHash, content, projectPath }),
 
+  // --- durable knowledge synthesis ---
+  getKnowledgeState: (projectPath) =>
+    ipcRenderer.invoke('wea:getKnowledgeState', { projectPath: projectPath || null }),
+  enqueueKnowledge: (request) => ipcRenderer.invoke('wea:enqueueKnowledge', request || {}),
+  processKnowledgeJob: (jobId) => ipcRenderer.invoke('wea:processKnowledgeJob', { jobId }),
+  retryKnowledgeJob: (request) => ipcRenderer.invoke('wea:retryKnowledgeJob', request || {}),
+  reviseKnowledgeProposal: (request) => ipcRenderer.invoke('wea:reviseKnowledgeProposal', request || {}),
+  rejectKnowledgeProposal: (request) => ipcRenderer.invoke('wea:rejectKnowledgeProposal', request || {}),
+  applyKnowledgeProposal: (request) => ipcRenderer.invoke('wea:applyKnowledgeProposal', request || {}),
+  applyKnowledgeDocument: (request) => ipcRenderer.invoke('wea:applyKnowledgeDocument', request || {}),
+
   // --- clipboard / attachments ---
   readClipboardImage: () => ipcRenderer.invoke('wea:readClipboardImage'),
   discardPending: (tempPaths) => ipcRenderer.invoke('wea:discardPending', { tempPaths: tempPaths || [] }),
@@ -70,4 +81,5 @@ contextBridge.exposeInMainWorld('wea', {
   onShowCapture: (cb) => ipcRenderer.on('wea:show-capture', () => cb()),
   onArchived: (cb) => ipcRenderer.on('wea:archived', (_e, payload) => cb(payload)),
   onInboxUpdated: (cb) => ipcRenderer.on('wea:inbox-updated', (_e, payload) => cb(payload)),
+  onKnowledgeUpdated: (cb) => ipcRenderer.on('wea:knowledge-updated', (_e, payload) => cb(payload)),
 });

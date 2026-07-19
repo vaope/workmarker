@@ -32,6 +32,11 @@ Required JSON shape:
     "status": "in_progress",
     "next_action": "string"
   },
+  "knowledge_impact": {
+    "level": "ordinary",
+    "dimensions": [],
+    "reason": "This changes only the current task evidence."
+  },
   "attachment_paths": []
 }
 
@@ -41,3 +46,13 @@ and event ID generation deterministically.
 Status values are strictly limited to:
 - `in_progress` for anything still ongoing, waiting, blocked, or needing a next action.
 - `done` for completed/finished work. Do not output `completed`, `complete`, or other synonyms.
+
+Knowledge impact rules:
+- `knowledge_impact.level` is exactly `ordinary` or `high`.
+- `high` is allowed only when the proposed capture changes a project goal, scope,
+  architecture, risk, or milestone; list only those changed dimensions.
+- A task becoming done, a status change, or a growing event count is not sufficient
+  for `high` impact.
+- This object classifies the proposed capture. It never writes project knowledge.
+- Return no IDs, paths, hashes, anchors, or Markdown structure beyond the archive
+  proposal fields declared above.
