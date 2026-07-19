@@ -417,6 +417,44 @@ _REQUIRED_TARGET_KEYS = {"project_id", "item_id", "task_id"}
 _REQUIRED_EVENT_KEYS = {"task_id", "input_text", "summary", "status", "next_action"}
 
 
+# ── Phase B synthesis agent ───────────────────────────────────
+
+def run_synthesizer(
+    prompt: str, project_doc: Path, opencode_bin: str = "opencode", model: str = ""
+) -> str:
+    return _run_opencode_agent(
+        prompt=prompt,
+        input_doc=project_doc,
+        agent_name="workevent-synthesizer",
+        opencode_bin=opencode_bin,
+        model=model,
+    )
+
+
+def parse_synthesizer_output(raw: str) -> dict:
+    """Parse synthesizer JSON output: {kind, sections: [{section_id, content, reason, source_event_ids}]}"""
+    inner = _extract_json_text(raw)
+    try:
+        data = json.loads(inner)
+    except json.JSONDecodeError as exc:
+        raise OpencodeRunnerError(f"invalid JSON from synthesizer: {exc}") from exc
+
+    required = {"kind", "sections"}
+    missing = required - data.keys()
+    if missing:
+        raise OpencodeRunnerError(f"missing keys in synthesizer output: {sorted(missing)}")
+
+    if not isinstance(data["sections"], list) or len(data["sections"]) == 0:
+        raise OpencodeRunnerError("synthesizer returned empty sections")
+
+    for i, s in enumerate(data["sections"]):
+        for field in ("section_id", "content", "reason"):
+            if field not in s:
+                raise OpencodeRunnerError(f"section[{i}] missing field: {field}")
+
+    return data
+
+
 def _validate_required_keys(data: dict) -> None:
     missing = _REQUIRED_TOP_KEYS - data.keys()
     if missing:
