@@ -73,6 +73,12 @@ contextBridge.exposeInMainWorld('wea', {
   openProjectDir: (projectPath) => ipcRenderer.invoke('wea:openProjectDir', { projectPath }),
   getReportScheduleStatus: () => ipcRenderer.invoke('wea:getReportScheduleStatus'),
 
+  // --- application updates ---
+  getUpdateState: () => ipcRenderer.invoke('wea:getUpdateState'),
+  checkForUpdates: () => ipcRenderer.invoke('wea:checkForUpdates'),
+  downloadUpdate: () => ipcRenderer.invoke('wea:downloadUpdate'),
+  installUpdate: () => ipcRenderer.invoke('wea:installUpdate'),
+
   // --- quick-capture window control ---
   hideCapture: () => ipcRenderer.send('wea:hideCapture'),
   resizeCapture: (height) => ipcRenderer.send('wea:resizeCapture', height),
@@ -82,4 +88,5 @@ contextBridge.exposeInMainWorld('wea', {
   onArchived: (cb) => ipcRenderer.on('wea:archived', (_e, payload) => cb(payload)),
   onInboxUpdated: (cb) => ipcRenderer.on('wea:inbox-updated', (_e, payload) => cb(payload)),
   onKnowledgeUpdated: (cb) => ipcRenderer.on('wea:knowledge-updated', (_e, payload) => cb(payload)),
+  onUpdateState: (cb) => ipcRenderer.on('wea:update-state', (_e, payload) => cb(payload)),
 });

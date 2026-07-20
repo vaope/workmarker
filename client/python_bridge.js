@@ -2,9 +2,13 @@
 // Contract: docs/designs/F001-client-architecture.md §3
 const { spawn } = require('child_process');
 const path = require('path');
+const { app } = require('electron');
 
 // client/ lives directly under the repo root; the Python package is importable from there.
 const REPO_ROOT = path.resolve(__dirname, '..');
+function backendRoot() {
+  return app.isPackaged ? process.resourcesPath : REPO_ROOT;
+}
 
 /**
  * Call a backend command. Request payload is sent as JSON on stdin; the final
@@ -20,7 +24,7 @@ function callBackend(command, payload, pythonCmd = 'python') {
     let child;
     try {
       child = spawn(pythonCmd, args, {
-        cwd: REPO_ROOT,
+        cwd: backendRoot(),
         env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
       });
     } catch (err) {
@@ -76,4 +80,4 @@ function parseLastJson(text, command) {
   }
 }
 
-module.exports = { callBackend, REPO_ROOT };
+module.exports = { callBackend, backendRoot, REPO_ROOT };
