@@ -256,6 +256,19 @@
         </select>
         <input id="settings-knowledge-weekly-time" type="time" value="18:00" />
       </fieldset>
+      <fieldset class="settings-update">
+        <legend>应用更新</legend>
+        <div class="update-version">当前版本：<span id="settings-app-version">—</span></div>
+        <div id="update-status" class="update-status" role="status">尚未检查更新</div>
+        <progress id="update-progress" class="hidden" value="0" max="100"></progress>
+        <div id="update-release-notes" class="update-release-notes hidden"></div>
+        <div class="settings-row update-actions">
+          <button id="update-check" class="ghost" type="button">检查更新</button>
+          <button id="update-download" class="primary hidden" type="button">下载更新</button>
+          <button id="update-install" class="primary hidden" type="button">重启并安装</button>
+        </div>
+        <span class="hint">更新包从 GitHub Releases 获取，只有点击后才会下载和安装。</span>
+      </fieldset>
       <div class="modal-actions">
         <button id="settings-cancel" class="ghost">取消</button>
         <button id="settings-save" class="primary">保存</button>

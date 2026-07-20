@@ -22,6 +22,7 @@ created: 2026-06-29
 |----|------|-------|------|
 | F003 | Trust Workflows (capture inbox, search, correction) | @cat-o1e4zfgp | [docs/designs/F003-trust-workflows.md](docs/designs/F003-trust-workflows.md) |
 | F004 | Project work map and unified capture | @cat-o1e4zfgp | [docs/designs/F004-work-map.md](docs/designs/F004-work-map.md) |
+| F008 | Windows 桌面客户端自动更新 | @cat-o1e4zfgp | [docs/features/F008-auto-update.md](docs/features/F008-auto-update.md) |
 
 ## Superseded
 

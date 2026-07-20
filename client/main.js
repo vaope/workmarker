@@ -7,16 +7,19 @@ const {
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { autoUpdater } = require('electron-updater');
 
 const { callBackend } = require('./python_bridge');
 const { loadConfig, saveConfig, dbPathFor } = require('./config');
 const { createHotkeyManager } = require('./hotkey_manager');
+const { createUpdateManager } = require('./update_manager');
 const KnowledgeSchedule = require('./knowledge_schedule');
 
 let mainWindow = null;
 let captureWindow = null;
 let tray = null;
 let isQuitting = false;
+let updateManager = null;
 
 const PENDING_DIR = path.join(os.tmpdir(), 'workeventagent', 'pending');
 const cfg = () => loadConfig();
@@ -126,6 +129,15 @@ async function runScheduledKnowledge(now = new Date()) {
 
 function ensurePendingDir() {
   try { fs.mkdirSync(PENDING_DIR, { recursive: true }); } catch { /* ignore */ }
+}
+
+function scheduleInitialUpdateCheck() {
+  if (!app.isPackaged) return;
+  setTimeout(() => {
+    updateManager.checkForUpdates().catch((error) => {
+      console.error('initial update check failed', error);
+    });
+  }, 5_000);
 }
 
 // --- windows ---------------------------------------------------------------
@@ -241,6 +253,11 @@ function withHotkeyRegistration(config) {
 
 function attachIpc() {
   ipcMain.handle('wea:getConfig', () => withHotkeyRegistration(loadConfig()));
+
+  ipcMain.handle('wea:getUpdateState', () => updateManager.getState());
+  ipcMain.handle('wea:checkForUpdates', () => updateManager.checkForUpdates());
+  ipcMain.handle('wea:downloadUpdate', () => updateManager.downloadUpdate());
+  ipcMain.handle('wea:installUpdate', () => updateManager.installUpdate());
 
   ipcMain.handle('wea:setWorkspace', (_e, { workspace }) => {
     const merged = saveConfig({ workspace });
@@ -795,6 +812,18 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     ensurePendingDir();
+    updateManager = createUpdateManager({
+      autoUpdater,
+      currentVersion: app.getVersion(),
+      isPackaged: app.isPackaged,
+      emit: (payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('wea:update-state', payload);
+        }
+      },
+      beforeInstall: () => { isQuitting = true; },
+      logger: console,
+    });
     attachIpc();
     try {
       await recoverKnowledgeWork();
@@ -808,6 +837,7 @@ if (!gotLock) {
     startupHotkeyRegistration = hotkeyManager.registerStartupPair({ capture: config.hotkey, main: config.mainHotkey });
     startReportScheduler();
     startKnowledgeScheduler();
+    scheduleInitialUpdateCheck();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createMainWindow();

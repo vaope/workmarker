@@ -47,6 +47,7 @@ async function boot() {
     if (state.view === 'inbox') loadInbox();
     else loadKnowledgeState(state.currentProject && state.currentProject.path).then(renderActionSummary);
   });
+  wea.onUpdateState(handleUpdateState);
   loadReportSchedule();
   // Check for unfinished cross-project corrections on startup
   if (state.config.workspace) checkPendingCorrections();
@@ -112,6 +113,9 @@ function bindStaticHandlers() {
   $('#settings-cancel').addEventListener('click', () => $('#settings-modal').classList.add('hidden'));
   $('#settings-pick-workspace').addEventListener('click', pickSettingsWorkspace);
   $('#settings-save').addEventListener('click', saveSettings);
+  $('#update-check').addEventListener('click', checkForApplicationUpdate);
+  $('#update-download').addEventListener('click', downloadApplicationUpdate);
+  $('#update-install').addEventListener('click', installApplicationUpdate);
 
   // tabs
   document.querySelectorAll('.tab').forEach((tab) => {
@@ -1140,7 +1144,7 @@ function bindAcceleratorCapture(input) {
   };
 }
 
-function openSettingsModal() {
+async function openSettingsModal() {
   state.settingsWorkspace = (state.config && state.config.workspace) || '';
   $('#settings-workspace').value = state.settingsWorkspace;
   $('#settings-hotkey').value = (state.config && state.config.hotkey) || 'CommandOrControl+Shift+Space';
@@ -1158,6 +1162,107 @@ function openSettingsModal() {
   $('#settings-modal').classList.remove('hidden');
   bindAcceleratorCapture($('#settings-hotkey'));
   bindAcceleratorCapture($('#settings-main-hotkey'));
+  try {
+    renderUpdateState(await wea.getUpdateState());
+  } catch (err) {
+    renderUpdateState({ status: 'error', message: err.message || String(err) });
+  }
+}
+
+function handleUpdateState(update = {}) {
+  renderUpdateState(update);
+  if (update.status === 'available') {
+    toast(`发现新版本 ${update.version || ''}，可在设置中下载`, 'info');
+  } else if (update.status === 'ready') {
+    toast(`版本 ${update.version || ''} 已下载，可在设置中重启安装`, 'ok');
+  }
+}
+
+function formatUpdateBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderUpdateState(update = {}) {
+  const status = update.status || 'idle';
+  const version = update.currentVersion || '—';
+  const statusEl = $('#update-status');
+  const progressEl = $('#update-progress');
+  const notesEl = $('#update-release-notes');
+  const checkButton = $('#update-check');
+  const downloadButton = $('#update-download');
+  const installButton = $('#update-install');
+  if (!statusEl || !progressEl || !notesEl) return;
+
+  $('#settings-app-version').textContent = version;
+  const messages = {
+    idle: '尚未检查更新',
+    development_mode: '开发模式不检查更新；安装后的应用可在这里更新。',
+    checking: '正在检查更新…',
+    available: `发现新版本 ${update.version || ''}`,
+    not_available: '当前已是最新版本。',
+    downloading: update.progress
+      ? `正在下载 ${update.progress.percent.toFixed(2)}%（${formatUpdateBytes(update.progress.transferred)} / ${formatUpdateBytes(update.progress.total)}）`
+      : '正在准备下载…',
+    ready: `版本 ${update.version || ''} 已下载，可重启安装。`,
+    error: `更新失败：${update.message || '未知错误'}`,
+  };
+  statusEl.textContent = messages[status] || messages.idle;
+
+  const progress = update.progress || {};
+  progressEl.value = Number(progress.percent || 0);
+  progressEl.classList.toggle('hidden', status !== 'downloading');
+
+  notesEl.textContent = update.releaseNotes || '';
+  notesEl.classList.toggle('hidden', !update.releaseNotes);
+
+  checkButton.classList.toggle('hidden', status === 'available' || status === 'downloading' || status === 'ready');
+  checkButton.disabled = status === 'checking' || status === 'development_mode';
+  downloadButton.classList.toggle('hidden', status !== 'available');
+  downloadButton.disabled = status !== 'available';
+  installButton.classList.toggle('hidden', status !== 'ready');
+  installButton.disabled = status !== 'ready';
+}
+
+async function checkForApplicationUpdate() {
+  renderUpdateState({ status: 'checking', currentVersion: $('#settings-app-version').textContent });
+  try {
+    const result = await wea.checkForUpdates();
+    if (result && result.state) renderUpdateState(result.state);
+  } catch (err) {
+    renderUpdateState({
+      status: 'error',
+      currentVersion: $('#settings-app-version').textContent,
+      message: err.message || String(err),
+    });
+  }
+}
+
+async function downloadApplicationUpdate() {
+  try {
+    const result = await wea.downloadUpdate();
+    if (result && result.state) renderUpdateState(result.state);
+  } catch (err) {
+    renderUpdateState({
+      status: 'error',
+      currentVersion: $('#settings-app-version').textContent,
+      message: err.message || String(err),
+    });
+  }
+}
+
+async function installApplicationUpdate() {
+  try {
+    const result = await wea.installUpdate();
+    if (result && result.state) renderUpdateState(result.state);
+  } catch (err) {
+    renderUpdateState({
+      status: 'error',
+      currentVersion: $('#settings-app-version').textContent,
+      message: err.message || String(err),
+    });
+  }
 }
 
 async function pickSettingsWorkspace() {

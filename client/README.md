@@ -29,6 +29,43 @@ client\start-client.cmd
 - Python 3.11+（已验证 3.13，须在 PATH —— 客户端通过 `python -m workeventagent.gui <cmd>` 调 backend）
 - opencode CLI（在 PATH，归档时调用，约 10-30s/次）
 
+安装版会把 `workeventagent/` Python 包一并放入 Electron resources，但仍要求系统 PATH 中有 Python 3.11+ 和 opencode CLI。
+
+## Windows 安装包与自动更新
+
+生成本地 NSIS 安装包（不发布）：
+
+```bash
+cd client
+npm.cmd run test:update
+npm.cmd run dist:win
+```
+
+如果本机连接 GitHub 的 electron-builder 工具包下载超时，可在 PowerShell 临时切换镜像；下载内容仍会按 electron-builder 内置校验和验证：
+
+```powershell
+$env:ELECTRON_BUILDER_BINARIES_MIRROR='https://npmmirror.com/mirrors/electron-builder-binaries/'
+npm.cmd run dist:win
+```
+
+产物在 `client/dist/`，包括安装程序、blockmap 和 `latest.yml`。安装版启动 5 秒后自动检查 `vaope/workmarker` 的 GitHub Releases；也可以在「设置 → 应用更新」手动检查。发现更新后，下载和重启安装都需要用户点击确认。
+
+发布新版本前先更新 `client/package.json` 的 `version`，再设置具备仓库写权限的 `GH_TOKEN`：
+
+```bash
+cd client
+npm.cmd run release:win
+```
+
+Phase 1 的 Windows 安装包尚未做代码签名，Windows SmartScreen 可能显示警告。开发态 `npm start` 不访问更新源。
+
+### 更新故障排查
+
+- 设置页显示“开发模式不检查更新”：这是源码启动的预期行为，请在安装版中验证更新。
+- 检查或下载失败：先确认本机能访问 GitHub Releases；失败不会替换或破坏当前版本，可稍后重试。
+- 更新后应用能启动但归档操作失败：在终端运行 `python --version` 和 `opencode --version`，确认 Python 3.11+ 与 opencode 仍在 PATH。Phase 1 不内置这两个运行时。
+- Windows 拦截安装包：Phase 1 尚未代码签名；只使用 `vaope/workmarker` Release 中与 `latest.yml` 校验和匹配的安装包。
+
 ## 重装 electron 的坑（重要）
 
 本机 `NODE_ENV=production` + `npm config omit=dev`，会导致 `npm install` **静默跳过 devDependencies（electron）**，装完只有 1 个包、`dist/electron.exe` 缺失。若 `node_modules` 丢失需重装：

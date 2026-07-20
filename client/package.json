@@ -6,12 +6,59 @@
   "author": "Clowder AI",
   "license": "MIT",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "test:update": "node --test tests/update_manager.test.js",
+    "dist:win": "electron-builder --win nsis --publish never",
+    "release:win": "electron-builder --win nsis --publish always"
   },
   "devDependencies": {
-    "electron": "^33.4.0"
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
-    "workeventagent-client": "file:"
+    "electron-updater": "^6.8.9"
+  },
+  "build": {
+    "appId": "ai.clowder.workeventagent",
+    "productName": "WorkEventAgent",
+    "asar": true,
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!tests/**/*",
+      "!dist/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../workeventagent",
+        "to": "workeventagent",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "vaope",
+      "repo": "workmarker"
+    }
   }
 }
