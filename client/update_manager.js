@@ -7,14 +7,32 @@ function errorMessage(error) {
 }
 
 function releaseNotesValue(notes) {
-  if (typeof notes === 'string') return notes;
-  if (Array.isArray(notes)) {
-    return notes
+  let raw = '';
+  if (typeof notes === 'string') raw = notes;
+  else if (Array.isArray(notes)) {
+    raw = notes
       .map((entry) => (typeof entry === 'string' ? entry : entry && entry.note))
       .filter(Boolean)
       .join('\n\n');
   }
-  return '';
+  if (!/<\/?(?:p|br|ul|ol|li|div|h[1-6])\b/i.test(raw)) return raw;
+  return raw
+    .replace(/\r/g, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<li\b[^>]*>/gi, '- ')
+    .replace(/<\/li>\s*/gi, '\n')
+    .replace(/<\/p>\s*/gi, '\n\n')
+    .replace(/<\/(?:div|ul|ol|h[1-6])>\s*/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#(?:39|x27);/gi, "'")
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function createUpdateManager({

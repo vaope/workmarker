@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 
-const { createUpdateManager } = require('../update_manager');
+const { createUpdateManager, releaseNotesValue } = require('../update_manager');
 
 class FakeUpdater extends EventEmitter {
   constructor() {
@@ -81,7 +81,7 @@ test('moves through check, download progress, and ready states', async () => {
     currentVersion: '0.1.0',
     version: '0.2.0',
     releaseDate: '2026-07-20T00:00:00.000Z',
-    releaseNotes: '<p>Safer updates</p>',
+    releaseNotes: 'Safer updates',
   });
 
   const download = await manager.downloadUpdate();
@@ -133,4 +133,15 @@ test('turns updater errors into renderer-safe state', () => {
     currentVersion: '0.1.0',
     message: 'network unavailable',
   });
+});
+
+test('converts HTML release notes to readable text without breaking markdown links', () => {
+  assert.equal(
+    releaseNotesValue('<p>Safer &amp; faster</p><ul><li>Clear progress</li></ul>'),
+    'Safer & faster\n\n- Clear progress'
+  );
+  assert.equal(
+    releaseNotesValue('See <https://example.com/releases> for details.'),
+    'See <https://example.com/releases> for details.'
+  );
 });
