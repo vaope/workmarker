@@ -81,6 +81,7 @@ Schema v2 uses stable headings and visible checkboxes:
 #### [x] 任务：主窗口先写 Inbox <!-- task:main-capture-inbox -->
 
 - 下一步：补充解析完成通知
+- 结论：主窗口已经使用持久化 Inbox
 <!-- task-meta:last_event_id=20260712-main-capture-inbox -->
 ```
 
@@ -89,6 +90,7 @@ Schema v2 uses stable headings and visible checkboxes:
 - Checkbox and control metadata are deterministically rendered by the wrapper.
 - Raw `status: in_progress` fields are absent from visible text.
 - Parsers depend on anchors and heading boundaries, not visible title text.
+- Missing conclusion lines remain valid legacy input; newly rendered task blocks include the field.
 
 ### Work Map Grammar (v2)
 
@@ -96,9 +98,10 @@ Schema v2 uses stable headings and visible checkboxes:
 item       = (item_v2_heading bg_line* task*)
 item_v2_heading = "### 工作项：" title "<!-- item:" item_id "-->"
 bg_line    = any non-heading, non-"- " structured line before first task
-task       = (task_v2_heading next_action_line task_meta_line)
+task       = (task_v2_heading next_action_line conclusion_line task_meta_line)
 task_v2_heading = "#### [" (" " / "x") "] 任务：" title "<!-- task:" task_id "-->"
 next_action_line = "- 下一步：" text
+conclusion_line = "- 结论：" text
 task_meta_line = "<!-- task-meta:last_event_id=" event_id "-->"
 ```
 
@@ -131,8 +134,10 @@ item_v1_heading = "### Item: " title "<!-- item:" item_id "-->"
 bg_line    = "- background: " text
 task       = (task_v1_heading meta*)
 task_v1_heading = "#### Task: " title "<!-- task:" task_id "-->"
-meta       = "- status: " ("in_progress" / "done") / "- next_action: " text / "- last_event_id: " id
+meta       = "- status: " ("in_progress" / "done") / "- next_action: " text / "- conclusion: " text / "- last_event_id: " id
 ```
+
+Missing `- conclusion:` lines remain valid legacy input; newly rendered v1 task blocks include the field.
 
 ### Migration
 

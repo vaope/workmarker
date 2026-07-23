@@ -21,9 +21,11 @@ V1_TASK_RE = re.compile(r"^####\s+Task:\s+(.+?)\s*<!--\s*task:(.+?)\s*-->\s*$")
 V2_TASK_RE = re.compile(r"^####\s+\[([ xX])\]\s+任务[：:]\s*(.+?)\s*<!--\s*task:(.+?)\s*-->\s*$")
 V1_BG_RE = re.compile(r"^-\s*background:\s*(.*)")
 V2_NEXT_RE = re.compile(r"^-\s*下一步[：:]\s*(.*)$")
+V2_CONCLUSION_RE = re.compile(r"^-\s*结论[：:]\s*(.*)$")
 V2_META_RE = re.compile(r"^<!--\s*task-meta:last_event_id=(.*?)\s*-->$")
 V1_STATUS_RE = re.compile(r"^-\s*status:\s*(.*)")
 V1_NEXT_ACTION_RE = re.compile(r"^-\s*next_action:\s*(.*)")
+V1_CONCLUSION_RE = re.compile(r"^-\s*conclusion:\s*(.*)")
 V1_LAST_EVENT_RE = re.compile(r"^-\s*last_event_id:\s*(.*)")
 
 
@@ -126,6 +128,7 @@ def parse_work_map(text: str, strict: bool = False) -> list[dict]:
                     "title": (tm.group(2) if v >= 2 else tm.group(1)).strip(),
                     "status": status,
                     "next_action": "",
+                    "conclusion": "",
                     "last_event_id": "",
                     "_has_status": _has_status,
                 }
@@ -147,6 +150,10 @@ def parse_work_map(text: str, strict: bool = False) -> list[dict]:
                 if nm:
                     current_task["next_action"] = nm.group(1).strip()
                     continue
+                cm = V1_CONCLUSION_RE.match(line)
+                if cm:
+                    current_task["conclusion"] = cm.group(1).strip()
+                    continue
                 lm = V1_LAST_EVENT_RE.match(line)
                 if lm:
                     current_task["last_event_id"] = lm.group(1).strip()
@@ -156,6 +163,10 @@ def parse_work_map(text: str, strict: bool = False) -> list[dict]:
                 nm2 = V2_NEXT_RE.match(line)
                 if nm2:
                     current_task["next_action"] = nm2.group(1).strip()
+                    continue
+                cm2 = V2_CONCLUSION_RE.match(line)
+                if cm2:
+                    current_task["conclusion"] = cm2.group(1).strip()
                     continue
                 mm2 = V2_META_RE.match(line)
                 if mm2:
@@ -208,25 +219,25 @@ def render_v2_task(task: dict) -> str:
     """Render a single task block in v2 Markdown."""
     checked = "x" if task.get("status") == "done" else " "
     next_action = str(task.get("next_action", "")).replace("\n", " ").strip()
+    conclusion = str(task.get("conclusion", "")).replace("\n", " ").strip()
     last_event = str(task.get("last_event_id", "")).strip()
     return (
         f"#### [{checked}] 任务：{task['title']} <!-- task:{task['task_id']} -->\n"
         f"- 下一步：{next_action}\n"
+        f"- 结论：{conclusion}\n"
         f"<!-- task-meta:last_event_id={last_event} -->"
     )
 
 
 def render_v1_task(task: dict) -> str:
     """Render a single task block in v1 Markdown."""
-    lines = [
+    return "\n".join([
         f"#### Task: {task['title']} <!-- task:{task['task_id']} -->",
         f"- status: {task.get('status', 'in_progress')}",
-    ]
-    if task.get("next_action"):
-        lines.append(f"- next_action: {task['next_action']}")
-    if task.get("last_event_id"):
-        lines.append(f"- last_event_id: {task['last_event_id']}")
-    return "\n".join(lines)
+        f"- next_action: {task.get('next_action', '')}",
+        f"- conclusion: {task.get('conclusion', '')}",
+        f"- last_event_id: {task.get('last_event_id', '')}",
+    ])
 
 
 # ── Mutation helpers ───────────────────────────────────────
@@ -272,6 +283,9 @@ def _task_field_match(line: str, schema_ver: int, field: str) -> tuple[re.Match[
     if field == "next_action":
         match = (V2_NEXT_RE if schema_ver >= 2 else V1_NEXT_ACTION_RE).match(content)
         return (match, 1) if match else None
+    if field == "conclusion":
+        match = (V2_CONCLUSION_RE if schema_ver >= 2 else V1_CONCLUSION_RE).match(content)
+        return (match, 1) if match else None
     if field == "last_event_id":
         match = (V2_META_RE if schema_ver >= 2 else V1_LAST_EVENT_RE).match(content)
         return (match, 1) if match else None
@@ -282,7 +296,7 @@ def _task_field_value(schema_ver: int, field: str, value: str) -> str:
     rendered = str(value)
     if schema_ver >= 2 and field == "status":
         return "x" if rendered == "done" else " "
-    if schema_ver >= 2 and field == "next_action":
+    if field in {"next_action", "conclusion"}:
         return rendered.replace("\n", " ").strip()
     if field == "last_event_id":
         return rendered.strip()
@@ -293,6 +307,8 @@ def _render_task_control_line(schema_ver: int, field: str, value: str) -> str:
     if schema_ver >= 2:
         if field == "next_action":
             return f"- 下一步：{value}"
+        if field == "conclusion":
+            return f"- 结论：{value}"
         if field == "last_event_id":
             return f"<!-- task-meta:last_event_id={value} -->"
     else:
@@ -300,6 +316,8 @@ def _render_task_control_line(schema_ver: int, field: str, value: str) -> str:
             return f"- status: {value}"
         if field == "next_action":
             return f"- next_action: {value}"
+        if field == "conclusion":
+            return f"- conclusion: {value}"
         if field == "last_event_id":
             return f"- last_event_id: {value}"
     raise ValueError(f"task field must exist in heading: {field}")
@@ -307,8 +325,8 @@ def _render_task_control_line(schema_ver: int, field: str, value: str) -> str:
 
 def _task_control_order(schema_ver: int) -> tuple[str, ...]:
     if schema_ver >= 2:
-        return ("next_action", "last_event_id")
-    return ("status", "next_action", "last_event_id")
+        return ("next_action", "conclusion", "last_event_id")
+    return ("status", "next_action", "conclusion", "last_event_id")
 
 
 def _preferred_newline(lines: list[str]) -> str:
@@ -370,6 +388,32 @@ def update_task_state(text: str, task_id: str, status: str, next_action: str = "
     })
 
 
+def complete_task_block(text: str, task_id: str, conclusion: str) -> str:
+    """Set done + conclusion without overwriting unrelated task fields."""
+    normalized = str(conclusion).replace("\n", " ").strip()
+    if not normalized:
+        raise ValueError("completion conclusion is required")
+    return _mutate_task_fields(text, task_id, {
+        "status": "done",
+        "conclusion": normalized,
+    })
+
+
+def insert_task_after(text: str, after_task_id: str, task: dict) -> str:
+    """Insert one rendered task immediately after an anchored task."""
+    schema_ver, _, heading_end = _find_task_heading(text, after_task_id)
+    insert_pos = _find_next_block_boundary(text, heading_end)
+    block = render_v2_task(task) if schema_ver >= 2 else render_v1_task(task)
+    before = text[:insert_pos]
+    if before.endswith("\n\n"):
+        prefix = ""
+    elif before.endswith("\n"):
+        prefix = "\n"
+    else:
+        prefix = "\n\n"
+    return before + prefix + block + "\n\n" + text[insert_pos:]
+
+
 def insert_item(text: str, item_id: str, title: str, background: str = "") -> str:
     """Insert a new item into the Work Map section."""
     section = find_section(text, "work-map")
@@ -408,7 +452,14 @@ def insert_task(text: str, item_id: str, task_id: str, title: str) -> str:
         raise ValueError(f"item not found: {item_id}")
     # Insert before next heading after this item
     next_pos = _find_next_block_boundary(text, m.end())
-    new_task = {"task_id": task_id, "title": title, "status": "in_progress", "next_action": "", "last_event_id": ""}
+    new_task = {
+        "task_id": task_id,
+        "title": title,
+        "status": "in_progress",
+        "next_action": "",
+        "conclusion": "",
+        "last_event_id": "",
+    }
     if v >= 2:
         block = "\n" + render_v2_task(new_task) + "\n"
     else:

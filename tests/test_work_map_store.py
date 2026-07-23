@@ -1,7 +1,13 @@
 import pytest
 
 from workeventagent.project_schema import find_section
-from workeventagent.work_map_store import parse_work_map, update_task_field, update_task_state
+from workeventagent.work_map_store import (
+    complete_task_block,
+    insert_task_after,
+    parse_work_map,
+    update_task_field,
+    update_task_state,
+)
 
 
 V1_MAP = """## Work Map
@@ -58,6 +64,16 @@ Beta background.
 ## 事件证据 <!-- section:timeline -->
 """
 
+V1_WITH_CONCLUSION = V1_MAP.replace(
+    "- next_action: Add retry.\n",
+    "- next_action: Add retry.\n- conclusion: Persistence is stable.\n",
+)
+
+V2_WITH_CONCLUSION = V2_MAP.replace(
+    "- 下一步：Add retry.\n",
+    "- 下一步：Add retry.\n- 结论：Persistence is stable.\n",
+)
+
 
 def test_v1_and_v2_parse_to_the_same_typed_state() -> None:
     assert parse_work_map(V1_MAP) == parse_work_map(V2_MAP) == [{
@@ -69,9 +85,51 @@ def test_v1_and_v2_parse_to_the_same_typed_state() -> None:
             "title": "Persist card",
             "status": "in_progress",
             "next_action": "Add retry.",
+            "conclusion": "",
             "last_event_id": "event-a",
         }],
     }]
+
+
+def test_v1_and_v2_parse_conclusion_to_the_same_state() -> None:
+    v1 = parse_work_map(V1_WITH_CONCLUSION)[0]["tasks"][0]
+    v2 = parse_work_map(V2_WITH_CONCLUSION)[0]["tasks"][0]
+    assert v1["conclusion"] == v2["conclusion"] == "Persistence is stable."
+
+
+@pytest.mark.parametrize("source", [V1_MAP, V2_MAP])
+def test_missing_conclusion_is_backward_compatible(source: str) -> None:
+    assert parse_work_map(source)[0]["tasks"][0]["conclusion"] == ""
+
+
+@pytest.mark.parametrize("source", [V1_MAP, V2_MAP])
+def test_complete_task_block_preserves_resume_and_event_fields(source: str) -> None:
+    updated = complete_task_block(source, "persist-card", "Persistence is stable.")
+    task = parse_work_map(updated)[0]["tasks"][0]
+    assert task == {
+        "task_id": "persist-card",
+        "title": "Persist card",
+        "status": "done",
+        "next_action": "Add retry.",
+        "conclusion": "Persistence is stable.",
+        "last_event_id": "event-a",
+    }
+
+
+def test_insert_task_after_keeps_same_item_and_following_item() -> None:
+    new_task = {
+        "task_id": "follow-up",
+        "title": "Follow up",
+        "status": "in_progress",
+        "next_action": "",
+        "conclusion": "",
+        "last_event_id": "",
+    }
+    updated = insert_task_after(V2_MULTI_ITEM_MAP, "a-task", new_task)
+    alpha = parse_work_map(updated)[0]
+    assert [task["task_id"] for task in alpha["tasks"]] == ["a-task", "follow-up"]
+    assert "<!-- item:beta -->" in updated
+    assert "<!-- task:b-task -->" in updated
 
 
 def test_v2_status_update_changes_checkbox_only() -> None:
