@@ -15,6 +15,7 @@ created: 2026-06-29
 |----|------|--------|-------|------|
 | F001 | WorkEventAgent Vision and MVP | spec | @cat-tv94q87o | [docs/features/F001-workeventagent-vision.md](docs/features/F001-workeventagent-vision.md) |
 | F007 | 项目全景与知识治理 | in-progress | @cat-z8iqdgtj | [docs/designs/F007-project-panorama.md](docs/designs/F007-project-panorama.md) |
+| F009 | 任务完成结论与后续任务 | approved | @cat-z8iqdgtj | [docs/features/F009-task-completion-flow.md](docs/features/F009-task-completion-flow.md) |
 
 ## Completed
 
