@@ -37,14 +37,17 @@
       refresh,
       notify,
     } = deps;
+    let completionBusy = false;
 
     function closeEditors() {
+      if (completionBusy) return false;
       document.querySelectorAll('.task-completion-editor').forEach((editor) => {
         const row = editor.closest('.task-row');
         const checkbox = row && row.querySelector('.task-check');
         if (checkbox) checkbox.disabled = false;
         editor.remove();
       });
+      return true;
     }
 
     function setBusy(editor, busy) {
@@ -77,8 +80,11 @@
     }
 
     function openEditor(input, row, task) {
+      if (!closeEditors()) {
+        input.checked = false;
+        return;
+      }
       input.checked = false;
-      closeEditors();
       input.disabled = true;
       row.insertAdjacentHTML('beforeend', panelMarkup(task));
       const editor = row.querySelector('.task-completion-editor');
@@ -88,6 +94,7 @@
       const saveButton = editor.querySelector('.completion-save');
 
       editor.querySelector('.completion-cancel').addEventListener('click', () => {
+        if (completionBusy) return;
         editor.remove();
         input.disabled = false;
         input.focus();
@@ -104,6 +111,7 @@
         }
 
         errorBox.classList.add('hidden');
+        completionBusy = true;
         setBusy(editor, true);
         try {
           const result = await completeTask(
@@ -115,13 +123,16 @@
           if (!result || !result.ok) {
             errorBox.textContent = `完成失败：${(result && result.error) || '后端错误'}`;
             errorBox.classList.remove('hidden');
+            completionBusy = false;
             setBusy(editor, false);
             return;
           }
           await refresh();
+          completionBusy = false;
         } catch (error) {
           errorBox.textContent = `完成出错：${error.message || error}`;
           errorBox.classList.remove('hidden');
+          completionBusy = false;
           setBusy(editor, false);
         }
       });
@@ -129,6 +140,10 @@
     }
 
     async function handleToggle(input, row, task) {
+      if (completionBusy) {
+        input.checked = task.status === 'done';
+        return;
+      }
       if (task.status === 'done') {
         await reopen(input, task);
         return;

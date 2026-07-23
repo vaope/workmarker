@@ -50,6 +50,37 @@ def test_preview_preserves_v1_task_conclusion() -> None:
     assert task["conclusion"] == "Existing verified finding."
 
 
+def test_preview_preserves_done_status_with_conclusion() -> None:
+    source = Path("tests/fixtures/multimodal-labeling.md").read_text(encoding="utf-8").replace(
+        "- status: in_progress\n"
+        "- next_action: Review current blocker list.\n"
+        "- last_event_id:",
+        "- status: done\n"
+        "- next_action: Review current blocker list.\n"
+        "- conclusion: Existing verified finding.\n"
+        "- last_event_id:",
+        1,
+    )
+
+    migrated = preview_v1_to_v2(source, status="active", phase="delivery").migrated_text
+
+    task = parse_work_map(migrated)[0]["tasks"][0]
+    assert task["status"] == "done"
+    assert task["conclusion"] == "Existing verified finding."
+
+
+def test_preview_preserves_conclusion_shaped_prose_outside_work_map() -> None:
+    custom_section = "\n## Custom Notes\n\n- conclusion: keep this custom prose\n"
+    source = (
+        Path("tests/fixtures/multimodal-labeling.md").read_text(encoding="utf-8")
+        + custom_section
+    )
+
+    migrated = preview_v1_to_v2(source, status="active", phase="delivery").migrated_text
+
+    assert custom_section in migrated
+
+
 def test_apply_rejects_stale_source_without_backup_or_write(tmp_path: Path) -> None:
     project = write_v1_fixture(tmp_path)
     original = project.read_text(encoding="utf-8")

@@ -18,7 +18,7 @@ from workeventagent.project_schema import (
     parse_frontmatter,
     schema_version,
 )
-from workeventagent.work_map_store import parse_work_map, render_v2_item, render_v2_task
+from workeventagent.work_map_store import parse_work_map
 from workeventagent.index_store import init_db, rebuild_index
 
 
@@ -132,6 +132,13 @@ def _transform_v1_to_v2(text: str, status: str, phase: str) -> str:
     # 2. Convert Work Map headings
     # 3. Convert Timeline heading
     lines_out: list[str] = []
+    task_states = {
+        task["task_id"]: task
+        for item in parse_work_map(text)
+        for task in item.get("tasks", [])
+    }
+    in_work_map = False
+    current_task_id = ""
 
     for line in body.splitlines(keepends=True):
         stripped = line.strip()
@@ -149,39 +156,81 @@ def _transform_v1_to_v2(text: str, status: str, phase: str) -> str:
 
         # Work Map → 工作地图
         if stripped == "## Work Map":
+            in_work_map = True
+            current_task_id = ""
             lines_out.append("## 工作地图 <!-- section:work-map -->\n")
             continue
 
+        if in_work_map and stripped.startswith("## "):
+            in_work_map = False
+            current_task_id = ""
+
         # Convert Work Map items and tasks
-        item_match = re.match(r"^###\s+Item:\s+(.+?)\s*<!--\s*item:(.+?)\s*-->\s*$", stripped)
+        item_match = (
+            re.match(r"^###\s+Item:\s+(.+?)\s*<!--\s*item:(.+?)\s*-->\s*$", stripped)
+            if in_work_map
+            else None
+        )
         if item_match:
+            current_task_id = ""
             lines_out.append(f"### 工作项：{item_match.group(1).strip()} <!-- item:{item_match.group(2).strip()} -->\n")
             continue
 
-        task_match = re.match(r"^####\s+Task:\s+(.+?)\s*<!--\s*task:(.+?)\s*-->\s*$", stripped)
+        task_match = (
+            re.match(r"^####\s+Task:\s+(.+?)\s*<!--\s*task:(.+?)\s*-->\s*$", stripped)
+            if in_work_map
+            else None
+        )
         if task_match:
-            lines_out.append(f"#### [ ] 任务：{task_match.group(1).strip()} <!-- task:{task_match.group(2).strip()} -->\n")
+            current_task_id = task_match.group(2).strip()
+            task_state = task_states[current_task_id]
+            checked = "x" if task_state.get("status") == "done" else " "
+            lines_out.append(
+                f"#### [{checked}] 任务：{task_state['title']} "
+                f"<!-- task:{current_task_id} -->\n"
+            )
             continue
+
+        if in_work_map and stripped.startswith(("### ", "#### ")):
+            current_task_id = ""
 
         # Convert v1 metadata lines
-        status_match = re.match(r"^-\s*status:\s*(.*)$", stripped)
+        status_match = (
+            re.match(r"^-\s*status:\s*(.*)$", stripped)
+            if current_task_id
+            else None
+        )
         if status_match:
-            # Skip - handled by checkbox (parsed after migration)
+            # Already rendered from canonical task state.
             continue
 
-        next_match = re.match(r"^-\s*next_action:\s*(.*)$", stripped)
+        next_match = (
+            re.match(r"^-\s*next_action:\s*(.*)$", stripped)
+            if current_task_id
+            else None
+        )
         if next_match:
             lines_out.append(f"- 下一步：{next_match.group(1).strip()}\n")
             continue
 
-        conclusion_match = re.match(r"^-\s*conclusion:\s*(.*)$", stripped)
+        conclusion_match = (
+            re.match(r"^-\s*conclusion:\s*(.*)$", stripped)
+            if current_task_id
+            else None
+        )
         if conclusion_match:
             lines_out.append(f"- 结论：{conclusion_match.group(1).strip()}\n")
             continue
 
-        last_match = re.match(r"^-\s*last_event_id:\s*(.*)$", stripped)
+        last_match = (
+            re.match(r"^-\s*last_event_id:\s*(.*)$", stripped)
+            if current_task_id
+            else None
+        )
         if last_match:
-            lines_out.append(f"<!-- task-meta:last_event_id={last_match.group(1).strip()} -->\n")
+            lines_out.append(
+                f"<!-- task-meta:last_event_id={last_match.group(1).strip()} -->\n"
+            )
             continue
 
         # Decisions → 关键决策

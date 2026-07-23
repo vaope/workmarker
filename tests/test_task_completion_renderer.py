@@ -192,6 +192,143 @@ process.stdout.write(JSON.stringify({ disabled: checkbox.disabled, removed }));
     assert result == {"disabled": False, "removed": True}
 
 
+def test_busy_completion_cannot_be_closed_or_reentered() -> None:
+    script = r"""
+const fs = require('fs');
+const vm = require('vm');
+vm.runInThisContext(fs.readFileSync('client/windows/task-completion.js', 'utf8'));
+
+class Control {
+  constructor(value = '') {
+    this.value = value;
+    this.disabled = false;
+    this.checked = false;
+    this.handler = null;
+    this.classList = { add() {}, remove() {} };
+  }
+  addEventListener(_name, handler) { this.handler = handler; }
+  focus() {}
+}
+
+function makeEditor(row) {
+  const controls = {
+    conclusion: new Control(),
+    nextTask: new Control(),
+    cancel: new Control(),
+    save: new Control(),
+    error: new Control(),
+  };
+  controls.error.textContent = '';
+  return {
+    controls,
+    removed: false,
+    closest(selector) { return selector === '.task-row' ? row : null; },
+    remove() {
+      this.removed = true;
+      activeEditors = activeEditors.filter((candidate) => candidate !== this);
+    },
+    querySelector(selector) {
+      return {
+        '.completion-conclusion': controls.conclusion,
+        '.completion-next-task': controls.nextTask,
+        '.completion-error': controls.error,
+        '.completion-cancel': controls.cancel,
+        '.completion-save': controls.save,
+      }[selector];
+    },
+    querySelectorAll() {
+      return [controls.conclusion, controls.nextTask, controls.cancel, controls.save];
+    },
+  };
+}
+
+function makeRow(input) {
+  const row = {
+    markup: '',
+    editor: null,
+    insertAdjacentHTML(_where, markup) {
+      this.markup = markup;
+      this.editor = makeEditor(this);
+      activeEditors.push(this.editor);
+    },
+    querySelector(selector) {
+      if (selector === '.task-check') return input;
+      if (selector === '.task-completion-editor') return this.editor;
+      return null;
+    },
+  };
+  return row;
+}
+
+let activeEditors = [];
+globalThis.document = {
+  querySelectorAll(selector) {
+    return selector === '.task-completion-editor' ? activeEditors.slice() : [];
+  },
+};
+
+let completeCalls = 0;
+let resolveComplete;
+const pending = new Promise((resolve) => { resolveComplete = resolve; });
+const controller = TaskCompletion.createController({
+  getProjectPath: () => 'project.md',
+  completeTask: () => { completeCalls += 1; return pending; },
+  updateTask: async () => ({ ok: true }),
+  refresh: async () => {},
+  notify: () => {},
+});
+
+(async () => {
+  const firstInput = new Control();
+  firstInput.checked = true;
+  const firstRow = makeRow(firstInput);
+  await controller.handleToggle(firstInput, firstRow, {
+    task_id: 'first',
+    title: 'First',
+    status: 'in_progress',
+  });
+  firstRow.editor.controls.conclusion.value = 'First result';
+  firstRow.editor.controls.save.handler();
+
+  const closeResult = controller.closeEditors();
+  const firstRemoved = firstRow.editor.removed;
+  const firstCheckboxDisabled = firstInput.disabled;
+
+  const secondInput = new Control();
+  secondInput.checked = true;
+  const secondRow = makeRow(secondInput);
+  await controller.handleToggle(secondInput, secondRow, {
+    task_id: 'second',
+    title: 'Second',
+    status: 'in_progress',
+  });
+  if (secondRow.editor) {
+    secondRow.editor.controls.conclusion.value = 'Second result';
+    secondRow.editor.controls.save.handler();
+  }
+
+  process.stdout.write(JSON.stringify({
+    closeResult,
+    firstRemoved,
+    firstCheckboxDisabled,
+    secondOpened: Boolean(secondRow.editor),
+    secondChecked: secondInput.checked,
+    completeCalls,
+  }));
+  resolveComplete({ ok: true });
+})();
+"""
+    result = json.loads(run_node(script))
+    assert result == {
+        "closeResult": False,
+        "firstRemoved": False,
+        "firstCheckboxDisabled": True,
+        "secondOpened": False,
+        "secondChecked": False,
+        "completeCalls": 1,
+    }
+
+
 def test_typed_completion_bridge_is_bounded() -> None:
     main = Path("client/main.js").read_text(encoding="utf-8")
     preload = Path("client/preload.js").read_text(encoding="utf-8")

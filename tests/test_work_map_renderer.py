@@ -105,7 +105,8 @@ def test_task_editor_uses_lifecycle_field_without_status_bypass() -> None:
     assert "te-status" not in editor
     assert "task.status === 'done' ? 'conclusion' : 'next_action'" in editor
     assert "'status', 'done'" not in editor
-    assert editor.index("taskCompletion.closeEditors();") < editor.index(
+    close_guard = "if (!taskCompletion.closeEditors()) return;"
+    assert editor.index(close_guard) < editor.index(
         "row.querySelector('.task-editor')"
     )
 
