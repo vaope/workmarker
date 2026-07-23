@@ -21,6 +21,7 @@ from pathlib import Path
 
 from workeventagent.ids import make_event_id, make_stable_id, make_unique_stable_id
 from workeventagent.index_store import init_db, rebuild_index
+from workeventagent.task_completion import complete_task as complete_task_service
 from workeventagent.project_schema import (
     SECTION_BY_ID,
     SECTION_SPECS,
@@ -41,7 +42,6 @@ from workeventagent.work_map_store import (
     delete_task as wm_delete_task,
     delete_item as wm_delete_item,
     update_item as wm_update_item,
-    update_task_state as wm_update_task_state,
     update_task_field as wm_update_task_field,
 )
 from workeventagent.inbox_store import (
@@ -134,6 +134,7 @@ def _main_impl() -> None:
         "delete_task": handle_delete_task,
         "update_item": handle_update_item,
         "update_task": handle_update_task,
+        "complete_task": handle_complete_task,
         "generate_report": handle_generate_report,
         "inbox_create": handle_inbox_create,
         "inbox_list": handle_inbox_list,
@@ -1845,21 +1846,45 @@ def _set_item_background(text: str, item_id: str, background: str) -> str:
 
 # ── update_task ────────────────────────────────────────────
 
+def handle_complete_task(request: dict) -> dict:
+    return complete_task_service(
+        Path(request["project_path"]),
+        Path(request["db_path"]),
+        str(request.get("task_id", "")),
+        str(request.get("conclusion", "")),
+        str(request.get("next_task_title", "")),
+    )
+
+
 def handle_update_task(request: dict) -> dict:
     project_path = Path(request["project_path"])
     db_path = Path(request["db_path"])
     task_id = request["task_id"]
-    # Accept any subset of {status, title, next_action}
     field = request.get("field", "")
     value = request.get("value", "")
 
-    valid_fields = {"status", "title", "next_action"}
+    valid_fields = {"status", "title", "next_action", "conclusion"}
     if field not in valid_fields:
         return {"ok": False, "kind": "invalid_input",
                 "error": f"field must be one of: {', '.join(sorted(valid_fields))}"}
-    if field == "status" and value not in ("in_progress", "done"):
-        return {"ok": False, "kind": "invalid_input",
-                "error": "status must be in_progress or done"}
+    if field == "status" and value == "done":
+        return {
+            "ok": False,
+            "kind": "completion_required",
+            "error": "use complete_task to finish a task",
+        }
+    if field == "status" and value != "in_progress":
+        return {
+            "ok": False,
+            "kind": "invalid_input",
+            "error": "status update only supports in_progress",
+        }
+    if field == "conclusion" and not str(value).strip():
+        return {
+            "ok": False,
+            "kind": "invalid_input",
+            "error": "conclusion must not be empty",
+        }
 
     text = project_path.read_text(encoding="utf-8")
     try:
@@ -1875,45 +1900,13 @@ def handle_update_task(request: dict) -> dict:
 
 def _update_task_attr(text: str, task_id: str, field: str, value: str) -> str:
     """Update one attribute of a task block. Preserves anchor id."""
-    if schema_version(text) >= 2:
-        if field == "status":
-            updated = wm_update_task_state(text, task_id, value)
-        elif field == "title":
-            updated = wm_update_task_field(text, task_id, "title", value)
-        elif field == "next_action":
-            updated = wm_update_task_field(text, task_id, "next_action", value)
-        else:
-            raise ValueError(f"unsupported field for v2: {field}")
-        return _bump_updated_text(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-
-    task_anchor = f"<!-- task:{task_id} -->"
-    lines = text.splitlines(keepends=True)
-
-    task_idx = None
-    for i, line in enumerate(lines):
-        if task_anchor in line:
-            task_idx = i
-            break
-    if task_idx is None:
-        raise ValueError(f"Task anchor not found: {task_anchor}")
-
-    if field == "title":
-        # Replace display text in heading, keep anchor
-        lines[task_idx] = re.sub(
-            rf"(#### Task:\s+).+?(\s*<!--\s*task:{re.escape(task_id)}\s*-->)",
-            lambda m: f"{m.group(1)}{value}{m.group(2)}",
-            lines[task_idx],
-        )
+    if field in {"status", "title", "next_action", "conclusion"}:
+        updated = wm_update_task_field(text, task_id, field, value)
     else:
-        # Find the sub-item line within the next few lines
-        for j in range(task_idx + 1, min(task_idx + 5, len(lines))):
-            stripped = lines[j].strip()
-            if stripped.startswith(f"- {field}:"):
-                lines[j] = f"- {field}: {value}\n"
-                break
-
+        raise ValueError(f"unsupported task field: {field}")
     return _bump_updated_text(
-        "".join(lines), datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        updated,
+        datetime.now(timezone.utc).strftime("%Y-%m-%d"),
     )
 
 

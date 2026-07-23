@@ -15,6 +15,7 @@ from workeventagent.gui import (
     _safe_component,
     handle_create_item,
     handle_create_task,
+    handle_complete_task,
     handle_delete_item,
     handle_delete_task,
     handle_update_item,
@@ -1549,15 +1550,58 @@ class UpdateTaskTest(unittest.TestCase):
             task_id = tasks[0]["task_id"]
             self.assertEqual(tasks[0]["status"], "in_progress")
 
+            completed = handle_complete_task({
+                "project_path": str(proj),
+                "db_path": str(db),
+                "task_id": task_id,
+                "conclusion": "Completed for reopen test.",
+                "next_task_title": "",
+            })
+            self.assertTrue(completed["ok"], completed)
             result = handle_update_task({
                 "project_path": str(proj), "db_path": str(db),
-                "task_id": task_id, "field": "status", "value": "done",
+                "task_id": task_id, "field": "status", "value": "in_progress",
             })
 
-            self.assertTrue(result["ok"])
+            self.assertTrue(result["ok"], result)
             after = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"]
-            self.assertEqual(after[0]["status"], "done")
+            self.assertEqual(after[0]["status"], "in_progress")
+            self.assertEqual(after[0]["conclusion"], "Completed for reopen test.")
             self.assertEqual(list_jobs(ws), [], "manual task status must not enqueue synthesis")
+        finally:
+            tmp.cleanup()
+
+    def test_complete_task_command_requires_conclusion(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            task = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"][0]
+            before = proj.read_bytes()
+            result = handle_complete_task({
+                "project_path": str(proj),
+                "db_path": str(db),
+                "task_id": task["task_id"],
+                "conclusion": " ",
+                "next_task_title": "",
+            })
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["kind"], "invalid_input")
+            self.assertEqual(proj.read_bytes(), before)
+        finally:
+            tmp.cleanup()
+
+    def test_generic_status_done_requires_completion_command(self):
+        tmp, ws, db, proj = self._setup()
+        try:
+            task = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"][0]
+            result = handle_update_task({
+                "project_path": str(proj),
+                "db_path": str(db),
+                "task_id": task["task_id"],
+                "field": "status",
+                "value": "done",
+            })
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["kind"], "completion_required")
         finally:
             tmp.cleanup()
 
@@ -1665,12 +1709,12 @@ class UpdateTaskTest(unittest.TestCase):
             before_text = proj.read_text(encoding="utf-8")
             before_timeline = before_text.split("## Timeline", 1)[1]
 
-            result = handle_update_task({
+            result = handle_complete_task({
                 "project_path": str(proj),
                 "db_path": str(db),
                 "task_id": task["task_id"],
-                "field": "status",
-                "value": "done",
+                "conclusion": "Completed without changing Timeline.",
+                "next_task_title": "",
             })
 
             self.assertTrue(result["ok"])
@@ -3266,12 +3310,12 @@ class V2MutationTest(unittest.TestCase):
     # ── update_task v2 ───────────────────────────────────
 
     def test_update_task_v2_status(self):
-        result = handle_update_task({
+        result = handle_complete_task({
             "project_path": str(self.project),
             "db_path": str(self.db),
             "task_id": "route-archive",
-            "field": "status",
-            "value": "done",
+            "conclusion": "Archive routing validated.",
+            "next_task_title": "",
         })
         self.assertTrue(result["ok"], result)
 

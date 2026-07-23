@@ -474,6 +474,19 @@ function attachIpc() {
     }, c.pythonCmd);
   });
 
+  ipcMain.handle('wea:completeTask', async (_e, {
+    projectPath, taskId, conclusion, nextTaskTitle,
+  }) => {
+    const c = cfg();
+    return callBackend('complete_task', {
+      project_path: projectPath,
+      db_path: dbPathFor(c.workspace),
+      task_id: taskId,
+      conclusion,
+      next_task_title: nextTaskTitle || '',
+    }, c.pythonCmd);
+  });
+
   ipcMain.handle('wea:generateReport', async (_e, request) => {
     const c = cfg();
     return callBackend('generate_report', {

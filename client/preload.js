@@ -23,6 +23,13 @@ contextBridge.exposeInMainWorld('wea', {
     ipcRenderer.invoke('wea:updateItem', { projectPath, itemId, title, background }),
   updateTask: (projectPath, taskId, field, value) =>
     ipcRenderer.invoke('wea:updateTask', { projectPath, taskId, field, value }),
+  completeTask: (projectPath, taskId, conclusion, nextTaskTitle) =>
+    ipcRenderer.invoke('wea:completeTask', {
+      projectPath,
+      taskId,
+      conclusion,
+      nextTaskTitle: nextTaskTitle || '',
+    }),
   generateReport: (request) => ipcRenderer.invoke('wea:generateReport', request || {}),
 
   // --- inbox ---
