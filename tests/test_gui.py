@@ -2223,6 +2223,17 @@ class PhaseBImpactCommitTest(unittest.TestCase):
             self.assertEqual(list_jobs(workspace), [])
             self.assertNotIn("knowledge_job_id", result)
 
+    def test_ordinary_capture_commit_does_not_enqueue_legacy_classification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, _project = self._setup_confirmed_card(workspace, impact_level="ordinary")
+
+            result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            legacy_pending = workspace / ".workeventagent" / "classify_outbox" / "pending"
+            self.assertTrue(result["ok"], str(result))
+            self.assertEqual(list(legacy_pending.glob("*.json")), [])
+
     def test_high_impact_job_exists_before_project_commit(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -2268,6 +2279,20 @@ class PhaseBImpactCommitTest(unittest.TestCase):
             self.assertEqual(result["knowledge_job_id"], job_id)
             self.assertEqual(get_job(workspace, job_id)["state"], "queued")
             self.assertIn(event_id, {event["event_id"] for event in parse_timeline_events(project.read_text(encoding="utf-8"))})
+
+    def test_high_impact_commit_uses_only_the_knowledge_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            card, _project = self._setup_confirmed_card(workspace, impact_level="high")
+
+            result = handle_inbox_commit({"workspace": str(workspace), "capture_id": card["capture_id"]})
+
+            jobs = list_jobs(workspace)
+            legacy_pending = workspace / ".workeventagent" / "classify_outbox" / "pending"
+            self.assertTrue(result["ok"], str(result))
+            self.assertEqual(len(jobs), 1)
+            self.assertEqual(jobs[0]["trigger"], "high_impact")
+            self.assertEqual(list(legacy_pending.glob("*.json")), [])
 
     def test_failed_project_commit_leaves_visible_recoverable_job(self):
         with tempfile.TemporaryDirectory() as tmp:
