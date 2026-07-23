@@ -7,6 +7,7 @@ import pytest
 from workeventagent import project_migration
 from workeventagent.project_migration import apply_v1_to_v2, preview_v1_to_v2
 from workeventagent.project_schema import schema_version
+from workeventagent.work_map_store import parse_work_map
 
 
 def fixed_now() -> datetime:
@@ -32,6 +33,21 @@ def test_preview_preserves_identity_and_unknown_content() -> None:
     assert "keep-this-byte-for-byte" in preview.migrated_text
     assert preview.before_identity == preview.after_identity
     assert preview.diff.startswith("--- ")
+
+
+def test_preview_preserves_v1_task_conclusion() -> None:
+    source = Path("tests/fixtures/multimodal-labeling.md").read_text(encoding="utf-8").replace(
+        "- next_action: Review current blocker list.\n- last_event_id:",
+        "- next_action: Review current blocker list.\n"
+        "- conclusion: Existing verified finding.\n"
+        "- last_event_id:",
+        1,
+    )
+
+    migrated = preview_v1_to_v2(source, status="active", phase="delivery").migrated_text
+
+    task = parse_work_map(migrated)[0]["tasks"][0]
+    assert task["conclusion"] == "Existing verified finding."
 
 
 def test_apply_rejects_stale_source_without_backup_or_write(tmp_path: Path) -> None:

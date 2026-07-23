@@ -166,25 +166,24 @@ def _parse_project_document(text: str, project_path: Path) -> dict:
     tasks: list[dict] = []
     attachments_list: list[dict] = []
 
-    if v >= 2:
-        try:
-            items = parse_work_map(text)
-            for item in items:
-                for task in item.get("tasks", []):
-                    tasks.append({
-                        "task_id": task["task_id"],
-                        "item_id": item["item_id"],
-                        "title": task["title"],
-                        "status": task.get("status", ""),
-                        "next_action": task.get("next_action", ""),
-                        "conclusion": task.get("conclusion", ""),
-                        "last_event_id": task.get("last_event_id", ""),
-                        "doc_anchor": f"task:{task['task_id']}",
-                    })
-        except ValueError:
-            pass
-    else:
-        tasks = _parse_v1_tasks(text)
+    try:
+        items = parse_work_map(text)
+        for item in items:
+            for task in item.get("tasks", []):
+                tasks.append({
+                    "task_id": task["task_id"],
+                    "item_id": item["item_id"],
+                    "title": task["title"],
+                    "status": task.get("status", ""),
+                    "next_action": task.get("next_action", ""),
+                    "conclusion": task.get("conclusion", ""),
+                    "last_event_id": task.get("last_event_id", ""),
+                    "doc_anchor": f"task:{task['task_id']}",
+                })
+    except ValueError:
+        pass
+
+    if v < 2:
         attachments_list = _parse_v1_attachments(text)
 
     return {
@@ -194,73 +193,3 @@ def _parse_project_document(text: str, project_path: Path) -> dict:
         "tasks": tasks,
         "attachments": attachments_list,
     }
-
-
-def _parse_v1_tasks(text: str) -> list[dict]:
-    """Legacy v1 task parser for index rebuild (preserves exact behavior)."""
-    tasks: list[dict] = []
-    current_item_id = ""
-    in_work_map = False
-
-    task_re = re.compile(r"^####\s+Task:\s+(.+?)\s*<!--\s*task:(.+?)\s*-->\s*$")
-    item_re = re.compile(r"^###\s+Item:\s+(.+?)\s*<!--\s*item:(.+?)\s*-->\s*$")
-    status_re = re.compile(r"^-\s*status:\s*(.*)$")
-    next_action_re = re.compile(r"^-\s*next_action:\s*(.*)$")
-    conclusion_re = re.compile(r"^-\s*conclusion:\s*(.*)$")
-    last_event_re = re.compile(r"^-\s*last_event_id:\s*(.*)$")
-
-    current_task: dict | None = None
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped == "## Work Map":
-            in_work_map = True
-            continue
-        if in_work_map and stripped.startswith("## ") and stripped != "## Work Map":
-            break
-
-        if in_work_map:
-            item_match = item_re.match(line)
-            if item_match:
-                current_item_id = item_match.group(2).strip()
-                current_task = None
-                continue
-
-            task_match = task_re.match(line)
-            if task_match:
-                if current_task is not None:
-                    tasks.append(current_task)
-                current_task = {
-                    "task_id": task_match.group(2).strip(),
-                    "item_id": current_item_id,
-                    "title": task_match.group(1).strip(),
-                    "status": "",
-                    "next_action": "",
-                    "conclusion": "",
-                    "last_event_id": "",
-                    "doc_anchor": f"task:{task_match.group(2).strip()}",
-                }
-                continue
-
-            if current_task is not None:
-                status_match = status_re.match(line)
-                if status_match:
-                    current_task["status"] = status_match.group(1).strip()
-                    continue
-                next_match = next_action_re.match(line)
-                if next_match:
-                    current_task["next_action"] = next_match.group(1).strip()
-                    continue
-                conclusion_match = conclusion_re.match(line)
-                if conclusion_match:
-                    current_task["conclusion"] = conclusion_match.group(1).strip()
-                    continue
-                event_match = last_event_re.match(line)
-                if event_match:
-                    current_task["last_event_id"] = event_match.group(1).strip()
-                    continue
-
-    if current_task is not None:
-        tasks.append(current_task)
-
-    return tasks

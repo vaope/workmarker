@@ -105,6 +105,9 @@ def test_task_editor_uses_lifecycle_field_without_status_bypass() -> None:
     assert "te-status" not in editor
     assert "task.status === 'done' ? 'conclusion' : 'next_action'" in editor
     assert "'status', 'done'" not in editor
+    assert editor.index("taskCompletion.closeEditors();") < editor.index(
+        "row.querySelector('.task-editor')"
+    )
 
 
 def test_main_composer_uses_durable_inbox_not_single_proposal() -> None:

@@ -136,7 +136,7 @@
       openEditor(input, row, task);
     }
 
-    return Object.freeze({ handleToggle });
+    return Object.freeze({ closeEditors, handleToggle });
   }
 
   root.TaskCompletion = Object.freeze({ createController, panelMarkup });

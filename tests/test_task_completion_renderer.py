@@ -155,6 +155,43 @@ const controller = TaskCompletion.createController({
     assert result["refreshCalls"] == 1
 
 
+def test_completion_controller_close_restores_checkbox() -> None:
+    script = r"""
+const fs = require('fs');
+const vm = require('vm');
+vm.runInThisContext(fs.readFileSync('client/windows/task-completion.js', 'utf8'));
+
+const checkbox = { disabled: true };
+let removed = false;
+const row = {
+  querySelector(selector) {
+    return selector === '.task-check' ? checkbox : null;
+  },
+};
+const editor = {
+  closest(selector) { return selector === '.task-row' ? row : null; },
+  remove() { removed = true; },
+};
+globalThis.document = {
+  querySelectorAll(selector) {
+    return selector === '.task-completion-editor' ? [editor] : [];
+  },
+};
+const controller = TaskCompletion.createController({
+  getProjectPath: () => 'project.md',
+  completeTask: async () => ({ ok: true }),
+  updateTask: async () => ({ ok: true }),
+  refresh: async () => {},
+  notify: () => {},
+});
+
+controller.closeEditors();
+process.stdout.write(JSON.stringify({ disabled: checkbox.disabled, removed }));
+"""
+    result = json.loads(run_node(script))
+    assert result == {"disabled": False, "removed": True}
+
+
 def test_typed_completion_bridge_is_bounded() -> None:
     main = Path("client/main.js").read_text(encoding="utf-8")
     preload = Path("client/preload.js").read_text(encoding="utf-8")

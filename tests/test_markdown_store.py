@@ -5,6 +5,7 @@ from pathlib import Path
 from workeventagent.markdown_store import ProjectDocument, write_project_atomically
 from workeventagent.models import ArchiveProposal, TargetRef, TimelineEvent
 from workeventagent.project_schema import schema_version, section_content
+from workeventagent.work_map_store import parse_work_map
 
 FIXTURE = Path("tests/fixtures/multimodal-labeling.md")
 V2_FIXTURE = Path("tests/fixtures/project-v2.md")
@@ -71,6 +72,25 @@ class MarkdownStoreTest(unittest.TestCase):
         # Attachments preserved
         self.assertIn("attachments/2026-06-29/baseline.png", updated)
 
+    def test_apply_existing_v1_task_preserves_conclusion_and_replaces_event_pointer(self):
+        original = FIXTURE.read_text(encoding="utf-8").replace(
+            "- next_action: Review current blocker list.\n- last_event_id:",
+            "- next_action: Review current blocker list.\n"
+            "- conclusion: Existing verified finding.\n"
+            "- last_event_id:",
+            1,
+        )
+        updated = ProjectDocument.from_text(original).apply_proposal(
+            self.proposal(),
+            updated_date="2026-06-30",
+        )
+
+        task = parse_work_map(updated)[0]["tasks"][0]
+        self.assertEqual(task["conclusion"], "Existing verified finding.")
+        self.assertEqual(task["last_event_id"], "20260629-153000123-kv-cache-blockers")
+        target_block = updated.split("<!-- task:kv-cache-blockers -->", 1)[1].split("#### Task:", 1)[0]
+        self.assertEqual(target_block.count("- last_event_id:"), 1)
+
     def test_apply_does_not_change_task_title_line(self):
         """砚砚验收点2: 更新已有 task 不许动标题行"""
         doc = ProjectDocument.from_text(FIXTURE.read_text(encoding="utf-8"))
@@ -90,6 +110,7 @@ class MarkdownStoreTest(unittest.TestCase):
         # mandatory schema lines
         self.assertIn("- status:", updated.split("#### Task: Review blocker details")[1])
         self.assertIn("- next_action:", updated.split("#### Task: Review blocker details")[1])
+        self.assertIn("- conclusion:", updated.split("#### Task: Review blocker details")[1])
         self.assertIn("- last_event_id:", updated.split("#### Task: Review blocker details")[1])
 
     def test_new_item_inserts_item_and_task_before_timeline(self):

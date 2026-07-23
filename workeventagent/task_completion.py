@@ -38,6 +38,12 @@ def complete_task(
             "kind": "invalid_input",
             "error": "completion conclusion is required",
         }
+    if "<!--" in normalized_next_title or "-->" in normalized_next_title:
+        return {
+            "ok": False,
+            "kind": "invalid_input",
+            "error": "follow-up task title contains reserved Markdown structure",
+        }
 
     original = project_path.read_text(encoding="utf-8")
     try:

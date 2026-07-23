@@ -805,6 +805,7 @@ async function doDeleteItem(itemId) {
 }
 
 function showTaskEditor(row, task) {
+  taskCompletion.closeEditors();
   // Remove any existing editor first
   const existing = row.querySelector('.task-editor');
   if (existing) { existing.remove(); return; }

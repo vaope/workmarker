@@ -85,6 +85,24 @@ def test_invalid_completion_leaves_file_unchanged(tmp_path: Path) -> None:
     assert not db.exists()
 
 
+def test_structural_follow_up_title_is_rejected_without_writes(tmp_path: Path) -> None:
+    project, db = setup_project(tmp_path)
+    before = project.read_bytes()
+
+    result = complete_task(
+        project,
+        db,
+        "verify-cache",
+        "Cache behavior is stable.",
+        "Follow <!-- task:phantom -->",
+    )
+
+    assert result["ok"] is False
+    assert result["kind"] == "invalid_input"
+    assert project.read_bytes() == before
+    assert not db.exists()
+
+
 def test_already_done_completion_does_not_duplicate_follow_up(tmp_path: Path) -> None:
     project, db = setup_project(tmp_path)
     first = complete_task(project, db, "verify-cache", "Stable.", "Document cache")

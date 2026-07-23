@@ -83,6 +83,47 @@ updated: 2026-07-23
             self.assertEqual(task["item_id"], "kv-cache-few-shot")
             self.assertEqual(task["status"], "in_progress")
 
+    def test_rebuild_indexes_last_v1_task_before_each_next_item(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "workeventagent.sqlite"
+            project_path = Path(tmp) / "two-items.md"
+            project_path.write_text(
+                """---
+project_id: two-items
+title: Two Items
+doc_kind: work_project
+created: 2026-07-23
+updated: 2026-07-23
+---
+## Work Map
+### Item: First <!-- item:first -->
+#### Task: First task <!-- task:first-task -->
+- status: done
+- next_action:
+- conclusion: First conclusion
+- last_event_id: event-first
+
+### Item: Second <!-- item:second -->
+#### Task: Second task <!-- task:second-task -->
+- status: in_progress
+- next_action: Continue
+- conclusion:
+- last_event_id:
+
+## Timeline
+""",
+                encoding="utf-8",
+            )
+
+            init_db(db_path)
+            rebuild_index(db_path, [project_path])
+
+            first = get_task(db_path, "first-task")
+            second = get_task(db_path, "second-task")
+            self.assertEqual(first["item_id"], "first")
+            self.assertEqual(first["conclusion"], "First conclusion")
+            self.assertEqual(second["item_id"], "second")
+
     def test_rebuild_indexes_indented_attachments(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "workeventagent.sqlite"

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from workeventagent.models import ArchiveProposal
 from workeventagent.project_schema import schema_version
-from workeventagent.work_map_store import update_task_state, render_v2_task
+from workeventagent.work_map_store import render_v1_task, render_v2_task, update_task_state
 
 
 class ProjectDocument:
@@ -96,34 +96,16 @@ class ProjectDocument:
     def _replace_task_block(self, task_id: str, proposal: ArchiveProposal) -> str | None:
         full_text = "".join(["---\n", self.frontmatter, "\n---", "".join(self._body_lines)])
 
-        if schema_version(full_text) >= 2:
-            try:
-                return update_task_state(
-                    full_text, task_id,
-                    proposal.event.status,
-                    proposal.event.next_action,
-                    proposal.event.event_id,
-                )
-            except ValueError:
-                return None
-
-        match = re.search(
-            rf"(#### Task:.*?<!-- task:{re.escape(task_id)} -->.*?\n)"
-            rf"((?:-\s+(?:status|next_action|last_event_id):.*?\n)+)",
-            full_text,
-            re.MULTILINE,
-        )
-        if not match:
+        try:
+            return update_task_state(
+                full_text,
+                task_id,
+                proposal.event.status,
+                proposal.event.next_action,
+                proposal.event.event_id,
+            )
+        except ValueError:
             return None
-
-        title_line = match.group(1)
-        replacement = (
-            f"{title_line}"
-            f"- status: {proposal.event.status}\n"
-            f"- next_action: {proposal.event.next_action}\n"
-            f"- last_event_id: {proposal.event.event_id}\n"
-        )
-        return full_text[: match.start()] + replacement + full_text[match.end() :]
 
     def _append_timeline(self, body: str, proposal: ArchiveProposal) -> str:
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
@@ -157,20 +139,15 @@ class ProjectDocument:
         event = proposal.event
         target = proposal.target
         full_text = "".join(["---\n", self.frontmatter, "\n---", "".join(self._body_lines)])
-        if schema_version(full_text) >= 2:
-            return render_v2_task({
-                "task_id": target.task_id,
-                "title": target.task_title,
-                "status": event.status,
-                "next_action": event.next_action,
-                "last_event_id": event.event_id,
-            })
-        return (
-            f"#### Task: {target.task_title} <!-- task:{target.task_id} -->\n"
-            f"- status: {event.status}\n"
-            f"- next_action: {event.next_action}\n"
-            f"- last_event_id: {event.event_id}"
-        )
+        renderer = render_v2_task if schema_version(full_text) >= 2 else render_v1_task
+        return renderer({
+            "task_id": target.task_id,
+            "title": target.task_title,
+            "status": event.status,
+            "next_action": event.next_action,
+            "conclusion": "",
+            "last_event_id": event.event_id,
+        })
 
     def _insert_new_item_with_task(self, proposal: ArchiveProposal) -> str:
         target = proposal.target

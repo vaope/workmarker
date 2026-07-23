@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from workeventagent.correction_store import correct_event_same_project
+from workeventagent.work_map_store import parse_work_map
 
 PROJECT_WITH_ONE_EVENT = """---
 project_id: corr-project
@@ -22,6 +23,7 @@ updated: 2026-07-04
 #### Task: Task A <!-- task:task-a -->
 - status: in_progress
 - next_action: Keep going
+- conclusion: Existing verified finding
 - last_event_id: event-1
 
 ## Decisions
@@ -60,6 +62,10 @@ def test_same_project_correction_appends_event_and_preserves_original(tmp_path: 
     assert "event_type: correction" in text
     assert "corrects_event_id: event-1" in text
     assert "summary: Corrected summary" in text
+    task = parse_work_map(text)[0]["tasks"][0]
+    assert task["status"] == "done"
+    assert task["conclusion"] == "Existing verified finding"
+    assert task["last_event_id"] == result["correction_event_id"]
 
 
 # ── helpers ────────────────────────────────────────────────────
@@ -84,6 +90,7 @@ def _project_text(project_id: str, task_id: str, event_lines: list[str]) -> str:
         f"#### Task: Trust Task <!-- task:{task_id} -->",
         "- status: in_progress",
         "- next_action:",
+        "- conclusion: Existing verified finding",
         "- last_event_id:",
         "",
         "## Decisions",
@@ -186,6 +193,12 @@ def test_cross_project_intent_without_target_is_retryable(tmp_path: Path) -> Non
     assert "corr-target-event" in fixture["target"].read_text(encoding="utf-8")
     assert "corr-source-event" in fixture["source"].read_text(encoding="utf-8")
     assert "target_event_id: corr-target-event" in fixture["source"].read_text(encoding="utf-8")
+    source_task = parse_work_map(fixture["source"].read_text(encoding="utf-8"))[0]["tasks"][0]
+    target_task = parse_work_map(fixture["target"].read_text(encoding="utf-8"))[0]["tasks"][0]
+    assert source_task["conclusion"] == "Existing verified finding"
+    assert source_task["last_event_id"] == "corr-source-event"
+    assert target_task["conclusion"] == "Existing verified finding"
+    assert target_task["last_event_id"] == "corr-target-event"
 
 
 def test_cross_project_intent_with_target_already_written_advances(tmp_path: Path) -> None:
@@ -198,7 +211,7 @@ def test_cross_project_intent_with_target_already_written_advances(tmp_path: Pat
 
     target_text = fixture["target"].read_text(encoding="utf-8")
     assert result["ok"] is True
-    assert target_text.count("corr-target-event") == 1
+    assert target_text.count("<!-- event:corr-target-event -->") == 1
     assert "corr-source-event" in fixture["source"].read_text(encoding="utf-8")
 
 
@@ -214,7 +227,7 @@ def test_cross_project_target_written_without_source_visible_and_resumable(tmp_p
     assert pending[0]["correction_id"] == "corr-1"
     assert result["ok"] is True
     assert "corr-source-event" in fixture["source"].read_text(encoding="utf-8")
-    assert fixture["source"].read_text(encoding="utf-8").count("corr-source-event") == 1
+    assert fixture["source"].read_text(encoding="utf-8").count("<!-- event:corr-source-event -->") == 1
 
 
 def test_cross_project_target_written_with_source_already_written_marks_done(tmp_path: Path) -> None:
@@ -230,8 +243,8 @@ def test_cross_project_target_written_with_source_already_written_marks_done(tmp
     journal = json.loads(fixture["journal"].read_text(encoding="utf-8"))
     assert result["ok"] is True
     assert journal["stage"] == "done"
-    assert source_text.count("corr-source-event") == 1
-    assert target_text.count("corr-target-event") == 1
+    assert source_text.count("<!-- event:corr-source-event -->") == 1
+    assert target_text.count("<!-- event:corr-target-event -->") == 1
 
 
 # ── integration: handler chain (crash → visible → resume → cleared) ──────

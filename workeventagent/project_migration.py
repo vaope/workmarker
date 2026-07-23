@@ -174,6 +174,11 @@ def _transform_v1_to_v2(text: str, status: str, phase: str) -> str:
             lines_out.append(f"- 下一步：{next_match.group(1).strip()}\n")
             continue
 
+        conclusion_match = re.match(r"^-\s*conclusion:\s*(.*)$", stripped)
+        if conclusion_match:
+            lines_out.append(f"- 结论：{conclusion_match.group(1).strip()}\n")
+            continue
+
         last_match = re.match(r"^-\s*last_event_id:\s*(.*)$", stripped)
         if last_match:
             lines_out.append(f"<!-- task-meta:last_event_id={last_match.group(1).strip()} -->\n")

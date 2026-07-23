@@ -367,7 +367,15 @@ def _mutate_task_fields(text: str, task_id: str, updates: dict[str, str]) -> str
             match, group = field_match
             content, ending = _split_line_ending(line)
             value_start, value_end = match.span(group)
-            lines[index] = content[:value_start] + value + content[value_end:] + ending
+            replacement = value
+            if (
+                schema_ver < 2
+                and replacement
+                and value_start > 0
+                and content[value_start - 1] == ":"
+            ):
+                replacement = " " + replacement
+            lines[index] = content[:value_start] + replacement + content[value_end:] + ending
             break
         else:
             _insert_task_control_line(lines, schema_ver, field, value)
