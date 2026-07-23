@@ -41,6 +41,7 @@ from workeventagent.work_map_store import (
     parse_work_map,
     delete_task as wm_delete_task,
     delete_item as wm_delete_item,
+    insert_task as wm_insert_task,
     update_item as wm_update_item,
     update_task_field as wm_update_task_field,
 )
@@ -1961,6 +1962,7 @@ def render_new_project_v2(
                     existing_task_ids.add(task_id)
                     lines.append(f"#### [ ] 任务：{task_title} <!-- task:{task_id} -->")
                     lines.append("- 下一步：")
+                    lines.append("- 结论：")
                     lines.append(f"<!-- task-meta:last_event_id= -->")
                     lines.append("")
                 if not item_spec.get("tasks"):
@@ -2008,6 +2010,7 @@ def _generate_init_markdown(
             lines.append(f"#### Task: {task_title} <!-- task:{task_id} -->")
             lines.append("- status: in_progress")
             lines.append("- next_action: ")
+            lines.append("- conclusion: ")
             lines.append(f"- last_event_id: ")
             lines.append("")
         if not item_spec.get("tasks"):
@@ -2047,6 +2050,10 @@ def _insert_item_block(text: str, title: str, item_id: str, updated_date: str, b
 
 
 def _insert_task_block(text: str, item_id: str, title: str, task_id: str, updated_date: str) -> str:
+    if schema_version(text) >= 2:
+        updated = wm_insert_task(text, item_id, task_id, title)
+        return _bump_updated_text(updated, updated_date)
+
     item_anchor = f"<!-- item:{item_id} -->"
     lines = text.splitlines(keepends=True)
 
@@ -2072,6 +2079,7 @@ def _insert_task_block(text: str, item_id: str, title: str, task_id: str, update
         f"#### Task: {title} <!-- task:{task_id} -->\n",
         "- status: in_progress\n",
         "- next_action:\n",
+        "- conclusion:\n",
         "- last_event_id:\n",
         "\n",
     ])

@@ -792,9 +792,27 @@ class InitTest(unittest.TestCase):
             self.assertIn("<!-- item:item-one -->", text)
             self.assertIn("<!-- task:task-a -->", text)
             self.assertIn("<!-- task:task-b -->", text)
+            self.assertEqual(text.count("- conclusion:"), 2)
 
             # Verify attachments dir was created
             self.assertTrue((workspace / "attachments").is_dir())
+
+    def test_v2_init_renders_empty_conclusion_for_each_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            db_path = workspace / "index.sqlite"
+            result = handle_init({
+                "workspace": str(workspace),
+                "title": "V2 Project",
+                "project_id": "v2-project",
+                "db_path": str(db_path),
+                "schema_version": 2,
+                "items": [{"title": "Item One", "tasks": ["Task A", "Task B"]}],
+            })
+
+            self.assertTrue(result["ok"], result)
+            text = Path(result["project_path"]).read_text(encoding="utf-8")
+            self.assertEqual(text.count("- 结论："), 2)
 
     def test_init_rejects_existing_project(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -910,11 +928,45 @@ class ManualCreateTest(unittest.TestCase):
                 "title": "\u8c03\u7814",
             })
             tasks = handle_tasks({"project_path": str(project_path)})["items"][0]["tasks"]
+            text = project_path.read_text(encoding="utf-8")
 
         self.assertTrue(first["ok"])
         self.assertTrue(second["ok"])
         self.assertEqual(second["task_id"], f"{first['task_id']}-2")
         self.assertEqual([task["task_id"] for task in tasks], [first["task_id"], second["task_id"]])
+        self.assertEqual(text.count("- conclusion:"), 2)
+
+    def test_create_task_v2_stays_in_target_item_and_renders_conclusion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            db_path = workspace / "index.sqlite"
+            init = handle_init({
+                "workspace": str(workspace),
+                "title": "Manual V2 Project",
+                "project_id": "manual-v2-project",
+                "db_path": str(db_path),
+                "schema_version": 2,
+                "items": [
+                    {"title": "First", "tasks": []},
+                    {"title": "Second", "tasks": []},
+                ],
+            })
+            project_path = Path(init["project_path"])
+            before = handle_tasks({"project_path": str(project_path)})["items"]
+
+            result = handle_create_task({
+                "project_path": str(project_path),
+                "db_path": str(db_path),
+                "item_id": before[0]["item_id"],
+                "title": "Follow up",
+            })
+            after = handle_tasks({"project_path": str(project_path)})["items"]
+            text = project_path.read_text(encoding="utf-8")
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual([task["task_id"] for task in after[0]["tasks"]], [result["task_id"]])
+        self.assertEqual(after[1]["tasks"], [])
+        self.assertIn("- 结论：", text)
 
 
 # ── generate_init_markdown ───────────────────────────────

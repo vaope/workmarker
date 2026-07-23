@@ -19,6 +19,16 @@ const state = {
   settingsWorkspace: '',
 };
 
+const taskCompletion = TaskCompletion.createController({
+  getProjectPath: () => state.currentProject.path,
+  completeTask: (projectPath, taskId, conclusion, nextTaskTitle) =>
+    wea.completeTask(projectPath, taskId, conclusion, nextTaskTitle),
+  updateTask: (projectPath, taskId, field, value) =>
+    wea.updateTask(projectPath, taskId, field, value),
+  refresh: () => refreshCurrent(),
+  notify: (message, kind) => toast(message, kind),
+});
+
 // ---- boot ----------------------------------------------------------------
 async function boot() {
   bindStaticHandlers();
@@ -400,7 +410,9 @@ function bindWorkMapActions() {
   document.querySelectorAll('.task-row').forEach((row) => {
     const task = findTask(row.dataset.taskId);
     if (!task) return;
-    row.querySelector('.task-check').addEventListener('change', (event) => toggleTaskCompletion(event.currentTarget, task));
+    row.querySelector('.task-check').addEventListener('change', (event) => {
+      taskCompletion.handleToggle(event.currentTarget, row, task);
+    });
     row.querySelector('.task-edit-btn').addEventListener('click', () => showTaskEditor(row, task));
     row.querySelector('.task-del-btn').addEventListener('click', () => confirmDeleteTask(row, task));
   });
@@ -485,27 +497,6 @@ async function startDirectedKnowledge(projectPath, eventIds, regenerateOf) {
   switchView('inbox');
   toast('知识综合已生成，请核对证据与差异后确认', 'ok');
   return result;
-}
-
-async function toggleTaskCompletion(input, task) {
-  const previousStatus = task.status === 'done' ? 'done' : 'in_progress';
-  const nextStatus = previousStatus === 'done' ? 'in_progress' : 'done';
-  const projectPath = state.currentProject.path;
-  input.disabled = true;
-  try {
-    const result = await wea.updateTask(projectPath, task.task_id, 'status', nextStatus);
-    if (!result || !result.ok) {
-      input.checked = previousStatus === 'done';
-      input.disabled = false;
-      toast(`更新任务失败：${(result && result.error) || '后端错误'}`, 'err');
-      return;
-    }
-    await refreshCurrent();
-  } catch (error) {
-    input.checked = previousStatus === 'done';
-    input.disabled = false;
-    toast(`更新任务出错：${error.message || error}`, 'err');
-  }
 }
 
 // ---- inbox view ----------------------------------------------------------
@@ -820,26 +811,25 @@ function showTaskEditor(row, task) {
 
   const editor = document.createElement('div');
   editor.className = 'task-editor';
-  const doneSel = task.status === 'done' ? 'selected' : '';
-  const progSel = task.status === 'in_progress' ? 'selected' : '';
+  const lifecycleField = task.status === 'done'
+    ? `<div class="te-row">
+         <label>结论</label>
+         <input id="te-lifecycle" value="${esc(task.conclusion || '')}"
+           placeholder="记录完成结论…" />
+       </div>`
+    : `<div class="te-row">
+         <label>下一步</label>
+         <input id="te-lifecycle" value="${esc(task.next_action || '')}"
+           placeholder="下一步要做什么…" />
+       </div>`;
   editor.innerHTML =
     `<div class="te-row">
        <label>名称</label>
        <input id="te-title" value="${esc(task.title)}" />
-     </div>
-     <div class="te-row">
-       <label>状态</label>
-       <select id="te-status">
-         <option value="in_progress" ${progSel}>进行中</option>
-         <option value="done" ${doneSel}>已完成</option>
-       </select>
-     </div>
-     <div class="te-row">
-       <label>下一步</label>
-       <input id="te-next" value="${esc(task.next_action || '')}" placeholder="下一步要做什么…" />
-     </div>
-     <div class="te-acts">
-       <button class="ghost small" id="te-cancel">取消</button>
+      </div>
+      ${lifecycleField}
+      <div class="te-acts">
+        <button class="ghost small" id="te-cancel">取消</button>
        <button class="primary small-btn" id="te-save">保存</button>
      </div>`;
   row.appendChild(editor);
@@ -852,39 +842,51 @@ function showTaskEditor(row, task) {
   editor.querySelector('#te-save').addEventListener('click', (e) => {
     e.stopPropagation();
     const newTitle = editor.querySelector('#te-title').value.trim();
-    const newStatus = editor.querySelector('#te-status').value;
-    const newNext = editor.querySelector('#te-next').value.trim();
-    saveTaskEdits(task, newTitle, newStatus, newNext, row);
+    const lifecycleValue = editor.querySelector('#te-lifecycle').value.trim();
+    saveTaskEdits(task, newTitle, lifecycleValue, row);
   });
 
   editor.addEventListener('click', (e) => e.stopPropagation());
   editor.querySelector('#te-title').focus();
 }
 
-async function saveTaskEdits(task, newTitle, newStatus, newNext, row) {
-  const proj = state.currentProject.path;
+async function saveTaskEdits(task, newTitle, lifecycleValue, row) {
+  const projectPath = state.currentProject.path;
   const errors = [];
+  const lifecycleField = task.status === 'done' ? 'conclusion' : 'next_action';
+  const previousValue = task[lifecycleField] || '';
 
   try {
     if (newTitle && newTitle !== task.title) {
-      const r = await wea.updateTask(proj, task.task_id, 'title', newTitle);
-      if (!r || !r.ok) errors.push(`名称：${(r && r.error) || '失败'}`);
+      const result = await wea.updateTask(
+        projectPath,
+        task.task_id,
+        'title',
+        newTitle,
+      );
+      if (!result || !result.ok) {
+        errors.push(`名称：${(result && result.error) || '失败'}`);
+      }
     }
-    if (newStatus !== task.status) {
-      const r = await wea.updateTask(proj, task.task_id, 'status', newStatus);
-      if (!r || !r.ok) errors.push(`状态：${(r && r.error) || '失败'}`);
-    }
-    if (newNext !== (task.next_action || '')) {
-      const r = await wea.updateTask(proj, task.task_id, 'next_action', newNext);
-      if (!r || !r.ok) errors.push(`下一步：${(r && r.error) || '失败'}`);
+    if (lifecycleValue !== previousValue) {
+      const result = await wea.updateTask(
+        projectPath,
+        task.task_id,
+        lifecycleField,
+        lifecycleValue,
+      );
+      if (!result || !result.ok) {
+        errors.push(`${lifecycleField === 'conclusion' ? '结论' : '下一步'}：${
+          (result && result.error) || '失败'
+        }`);
+      }
     }
 
-    if (errors.length) { toast(`部分更新失败：${errors.join('；')}`, 'err'); }
-    else { toast('已保存', 'ok'); }
+    if (errors.length) toast(`部分更新失败：${errors.join('；')}`, 'err');
+    else toast('已保存', 'ok');
     await refreshCurrent();
-  } catch (err) {
-    toast(`保存出错：${err.message || err}`, 'err');
-    // Remove editor on error so user sees the original state
+  } catch (error) {
+    toast(`保存出错：${error.message || error}`, 'err');
     const editor = row.querySelector('.task-editor');
     if (editor) editor.remove();
   }

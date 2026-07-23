@@ -25,7 +25,9 @@
         <span class="task-check-box" aria-hidden="true"></span>
         <span class="task-copy">
           <span class="task-name">${esc(task.title)}</span>
-          ${task.next_action ? `<span class="task-next">${esc(task.next_action)}</span>` : ''}
+          ${done
+            ? `<span class="task-conclusion">${esc(task.conclusion || '未记录结论')}</span>`
+            : (task.next_action ? `<span class="task-next">${esc(task.next_action)}</span>` : '')}
         </span>
       </label>
       <span class="task-acts">

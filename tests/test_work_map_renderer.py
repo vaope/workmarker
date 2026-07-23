@@ -68,6 +68,7 @@ process.stdout.write(WorkMap.render([item]));
 def test_main_window_uses_work_map_without_project_timeline() -> None:
     html = Path("client/windows/main.html").read_text(encoding="utf-8")
     source = Path("client/windows/main.js").read_text(encoding="utf-8")
+    completion = Path("client/windows/task-completion.js").read_text(encoding="utf-8")
     assert '<script src="work-map.js"></script>' in html
     assert 'data-view="timeline"' not in html
     assert 'id="timeline-view"' not in html
@@ -75,7 +76,13 @@ def test_main_window_uses_work_map_without_project_timeline() -> None:
     refresh = source[source.index("async function refreshCurrent"):source.index("function switchView")]
     assert "wea.listTimeline" not in refresh
     assert "WorkMap.render(items)" in source
-    assert "wea.updateTask(projectPath, task.task_id, 'status', nextStatus)" in source
+    assert '<script src="task-completion.js"></script>' in html
+    assert "taskCompletion.handleToggle" in source
+    assert "wea.completeTask" in source
+    assert "'status',\n          'in_progress'" in completion
+    assert "'status', 'done'" not in source[
+        source.index("function bindWorkMapActions"):source.index("// ---- inbox view")
+    ]
 
 
 def test_main_window_uses_confirmed_hierarchy_labels() -> None:
@@ -89,6 +96,15 @@ def test_main_window_uses_confirmed_hierarchy_labels() -> None:
     assert "任务名称" in combined
     assert "删除需求" not in combined
     assert "所属需求" not in combined
+
+
+def test_task_editor_uses_lifecycle_field_without_status_bypass() -> None:
+    source = Path("client/windows/main.js").read_text(encoding="utf-8")
+    editor = source[source.index("function showTaskEditor"):source.index("function confirmDeleteTask")]
+    assert "te-lifecycle" in editor
+    assert "te-status" not in editor
+    assert "task.status === 'done' ? 'conclusion' : 'next_action'" in editor
+    assert "'status', 'done'" not in editor
 
 
 def test_main_composer_uses_durable_inbox_not_single_proposal() -> None:
