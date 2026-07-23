@@ -67,6 +67,7 @@ def init_db(db_path: Path) -> None:
             title TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT '',
             next_action TEXT NOT NULL DEFAULT '',
+            conclusion TEXT NOT NULL DEFAULT '',
             doc_path TEXT NOT NULL DEFAULT '',
             doc_anchor TEXT NOT NULL DEFAULT '',
             last_event_id TEXT NOT NULL DEFAULT ''
@@ -80,6 +81,13 @@ def init_db(db_path: Path) -> None:
         );
         """
     )
+    task_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
+    }
+    if "conclusion" not in task_columns:
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN conclusion TEXT NOT NULL DEFAULT ''"
+        )
     conn.commit()
     conn.close()
 
@@ -104,8 +112,9 @@ def rebuild_index(db_path: Path, project_paths: list[Path]) -> None:
 
         for task in doc["tasks"]:
             conn.execute(
-                    "INSERT OR REPLACE INTO tasks (task_id, project_id, item_id, title, status, next_action, doc_path, doc_anchor, last_event_id)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO tasks "
+                "(task_id, project_id, item_id, title, status, next_action, conclusion, "
+                "doc_path, doc_anchor, last_event_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     task["task_id"],
                     project_id,
@@ -113,6 +122,7 @@ def rebuild_index(db_path: Path, project_paths: list[Path]) -> None:
                     task["title"],
                     task["status"],
                     task["next_action"],
+                    task.get("conclusion", ""),
                     str(project_path),
                     task["doc_anchor"],
                     task["last_event_id"],
@@ -167,6 +177,7 @@ def _parse_project_document(text: str, project_path: Path) -> dict:
                         "title": task["title"],
                         "status": task.get("status", ""),
                         "next_action": task.get("next_action", ""),
+                        "conclusion": task.get("conclusion", ""),
                         "last_event_id": task.get("last_event_id", ""),
                         "doc_anchor": f"task:{task['task_id']}",
                     })
@@ -195,6 +206,7 @@ def _parse_v1_tasks(text: str) -> list[dict]:
     item_re = re.compile(r"^###\s+Item:\s+(.+?)\s*<!--\s*item:(.+?)\s*-->\s*$")
     status_re = re.compile(r"^-\s*status:\s*(.*)$")
     next_action_re = re.compile(r"^-\s*next_action:\s*(.*)$")
+    conclusion_re = re.compile(r"^-\s*conclusion:\s*(.*)$")
     last_event_re = re.compile(r"^-\s*last_event_id:\s*(.*)$")
 
     current_task: dict | None = None
@@ -224,6 +236,7 @@ def _parse_v1_tasks(text: str) -> list[dict]:
                     "title": task_match.group(1).strip(),
                     "status": "",
                     "next_action": "",
+                    "conclusion": "",
                     "last_event_id": "",
                     "doc_anchor": f"task:{task_match.group(2).strip()}",
                 }
@@ -237,6 +250,10 @@ def _parse_v1_tasks(text: str) -> list[dict]:
                 next_match = next_action_re.match(line)
                 if next_match:
                     current_task["next_action"] = next_match.group(1).strip()
+                    continue
+                conclusion_match = conclusion_re.match(line)
+                if conclusion_match:
+                    current_task["conclusion"] = conclusion_match.group(1).strip()
                     continue
                 event_match = last_event_re.match(line)
                 if event_match:

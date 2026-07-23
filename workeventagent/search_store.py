@@ -56,7 +56,10 @@ def build_search_documents(workspace: Path) -> list[dict]:
                 docs.append({
                     "kind": "task",
                     "title": task["title"],
-                    "snippet": task.get("next_action", ""),
+                    "snippet": " ".join(filter(None, [
+                        task.get("next_action", ""),
+                        task.get("conclusion", ""),
+                    ])),
                     "path": str(md),
                     "project_id": project_id,
                     "item_id": item["item_id"],

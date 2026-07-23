@@ -60,3 +60,19 @@ def test_search_reads_report_files(tmp_path: Path) -> None:
     results = search_workspace(tmp_path, "Inference chain")
 
     assert results[0]["kind"] == "report"
+
+
+def test_search_finds_task_conclusion(tmp_path: Path) -> None:
+    project = PROJECT.replace(
+        "- next_action: Build deterministic search\n",
+        "- next_action: Build deterministic search\n"
+        "- conclusion: Prefix reuse is stable under concurrency\n",
+        1,
+    )
+    (tmp_path / "project.md").write_text(project, encoding="utf-8")
+
+    results = search_workspace(tmp_path, "stable under concurrency")
+
+    assert results
+    assert results[0]["kind"] == "task"
+    assert results[0]["task_id"] == "kv-cache-search"
