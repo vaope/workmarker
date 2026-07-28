@@ -1,52 +1,10 @@
 from __future__ import annotations
 
-import re
 import sqlite3
 from pathlib import Path
 
-from workeventagent.project_schema import parse_frontmatter, schema_version
+from workeventagent.project_schema import parse_attachment_records, parse_frontmatter
 from workeventagent.work_map_store import parse_work_map
-
-
-def _parse_v1_attachments(text: str) -> list[dict]:
-    """Legacy v1 attachment parser for index rebuild."""
-    attachments: list[dict] = []
-    in_attachments = False
-    attach_path_re = re.compile(r"^\s*-\s*path:\s*(.*)$")
-    attach_task_re = re.compile(r"^\s*-\s*related_task_id:\s*(.*)$")
-    attach_note_re = re.compile(r"^\s*-\s*note:\s*(.*)$")
-    current_attachment: dict | None = None
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped == "## Attachments":
-            in_attachments = True
-            continue
-        if in_attachments and stripped.startswith("## ") and stripped != "## Attachments":
-            break
-
-        if in_attachments:
-            path_match = attach_path_re.match(line)
-            if path_match:
-                if current_attachment is not None:
-                    attachments.append(current_attachment)
-                current_attachment = {"path": path_match.group(1).strip(), "task_id": "", "note": ""}
-                continue
-
-            if current_attachment is not None:
-                task_match = attach_task_re.match(line)
-                if task_match:
-                    current_attachment["task_id"] = task_match.group(1).strip()
-                    continue
-                note_match = attach_note_re.match(line)
-                if note_match:
-                    current_attachment["note"] = note_match.group(1).strip()
-                    continue
-
-    if current_attachment is not None:
-        attachments.append(current_attachment)
-
-    return attachments
 
 
 def init_db(db_path: Path) -> None:
@@ -161,10 +119,20 @@ def _parse_project_document(text: str, project_path: Path) -> dict:
     project_id = frontmatter.get("project_id", "")
     title = frontmatter.get("title", "")
     updated_at = frontmatter.get("updated", "")
-    v = schema_version(text)
-
     tasks: list[dict] = []
-    attachments_list: list[dict] = []
+    try:
+        attachment_records = parse_attachment_records(text)
+    except ValueError:
+        attachment_records = []
+    attachments_list = [
+        {
+            "path": record.get("path", ""),
+            "task_id": record.get("related_task_id", ""),
+            "note": record.get("note", ""),
+        }
+        for record in attachment_records
+        if record.get("path")
+    ]
 
     try:
         items = parse_work_map(text)
@@ -182,9 +150,6 @@ def _parse_project_document(text: str, project_path: Path) -> dict:
                 })
     except ValueError:
         pass
-
-    if v < 2:
-        attachments_list = _parse_v1_attachments(text)
 
     return {
         "project_id": project_id,

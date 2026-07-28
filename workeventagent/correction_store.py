@@ -10,6 +10,7 @@ from pathlib import Path
 from workeventagent.ids import make_event_id
 from workeventagent.index_store import init_db, rebuild_index
 from workeventagent.markdown_store import write_project_atomically
+from workeventagent.project_schema import find_section
 from workeventagent.work_map_store import update_task_state as _wms_update_task_state
 
 
@@ -93,13 +94,10 @@ def correct_event_same_project(
 
     correction_block = "\n".join(correction_lines)
 
-    # Append correction event to ## Timeline section (v1) or ## 事件证据 section (v2)
-    timeline_match = re.search(r"## Timeline\n", original_text)
-    if not timeline_match:
-        timeline_match = re.search(r"## 事件证据.*\n", original_text)
-    if not timeline_match:
+    try:
+        insert_at = find_section(original_text, "timeline").content_start
+    except ValueError:
         return {"ok": False, "kind": "invalid_doc", "error": "timeline section not found"}
-    insert_at = timeline_match.end()
     new_text = original_text[:insert_at] + correction_block + "\n\n" + original_text[insert_at:]
 
     # Update target task in Work Map through the schema-aware canonical mutator.
@@ -163,13 +161,8 @@ def _task_exists_in_project(text: str, task_id: str) -> bool:
 def _append_event_to_timeline(
     text: str, event_lines: list[str], insert_after_original_event_id: str = "",
 ) -> str:
-    """Append event lines right after ## Timeline header (v1 or v2)."""
-    timeline_match = re.search(r"## Timeline\n", text)
-    if not timeline_match:
-        timeline_match = re.search(r"## 事件证据.*\n", text)
-    if not timeline_match:
-        raise ValueError("timeline section not found")
-    insert_at = timeline_match.end()
+    """Append event lines through the stable Timeline section lookup."""
+    insert_at = find_section(text, "timeline").content_start
     block = "\n".join(event_lines)
     return text[:insert_at] + block + "\n\n" + text[insert_at:]
 
@@ -270,7 +263,6 @@ def correct_event_cross_project(
     summary = request.get("summary", "")
     status = request.get("status", "in_progress")
     next_action = request.get("next_action", "")
-    reason = request.get("reason", "")
     source_item_id = request.get("source_item_id", "")
 
     # Validate source event exists
@@ -293,8 +285,6 @@ def correct_event_cross_project(
 
     # MVP: same-workspace assumption — both source and target are flat files under the same workspace
     workspace = source_path.parent
-    journal_dir = _corrections_dir(workspace)
-
     # ── Step 1: Write intent journal ──
     journal = {
         "correction_id": correction_id,

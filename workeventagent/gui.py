@@ -10,20 +10,20 @@ No input() — zero interaction. Debug info → stderr.
 from __future__ import annotations
 
 import json as _json
+import os
 import re
 import shutil
 import sys
 import tempfile
 import traceback
 from dataclasses import replace
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 
 from workeventagent.ids import make_event_id, make_stable_id, make_unique_stable_id
 from workeventagent.index_store import init_db, rebuild_index
 from workeventagent.task_completion import complete_task as complete_task_service
 from workeventagent.project_schema import (
-    SECTION_BY_ID,
     SECTION_SPECS,
     find_section,
     metadata_hash,
@@ -41,6 +41,7 @@ from workeventagent.work_map_store import (
     parse_work_map,
     delete_task as wm_delete_task,
     delete_item as wm_delete_item,
+    insert_item as wm_insert_item,
     insert_task as wm_insert_task,
     update_item as wm_update_item,
     update_task_field as wm_update_task_field,
@@ -491,8 +492,6 @@ def handle_timeline(request: dict) -> dict:
 
 
 # ── generate_report ───────────────────────────────────────
-
-import os
 
 
 def _safe_component(raw: str | None) -> str:
@@ -1537,13 +1536,11 @@ def handle_init(request: dict) -> dict:
 
     now = datetime.now(timezone.utc)
     date_str = now.strftime("%Y-%m-%d")
-    use_v2 = request.get("schema_version") == 2 or request.get("status") or request.get("phase")
-    if use_v2:
-        status = request.get("status", "active")
-        phase = request.get("phase", "planning")
-        markdown = render_new_project_v2(project_id, title, date_str, items_spec, status, phase)
-    else:
-        markdown = _generate_init_markdown(project_id, title, date_str, items_spec)
+    status = request.get("status", "active")
+    phase = request.get("phase", "planning")
+    markdown = _generate_init_markdown(
+        project_id, title, date_str, items_spec, status, phase,
+    )
     workspace.mkdir(parents=True, exist_ok=True)
     project_path.write_text(markdown, encoding="utf-8")
 
@@ -1576,7 +1573,8 @@ def handle_create_item(request: dict) -> dict:
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     try:
-        updated = _insert_item_block(text, title, item_id, date_str, background)
+        updated = wm_insert_item(text, item_id, title, background)
+        updated = _bump_updated_text(updated, date_str)
     except ValueError as exc:
         return {"ok": False, "kind": "invalid_project", "error": str(exc)}
 
@@ -1599,7 +1597,8 @@ def handle_create_task(request: dict) -> dict:
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     try:
-        updated = _insert_task_block(text, item_id, title, task_id, date_str)
+        updated = wm_insert_task(text, item_id, task_id, title)
+        updated = _bump_updated_text(updated, date_str)
     except ValueError as exc:
         return {"ok": False, "kind": "invalid_project", "error": str(exc)}
 
@@ -1633,45 +1632,12 @@ def _delete_item_block(text: str, item_id: str) -> tuple[str, int]:
 
     Returns (updated_text, deleted_task_count).
     """
-    if schema_version(text) >= 2:
-        items = parse_work_map(text)
-        target = next((it for it in items if it["item_id"] == item_id), None)
-        if target is None:
-            raise ValueError(f"Item anchor not found: <!-- item:{item_id} -->")
-        task_count = len(target["tasks"])
-        updated = wm_delete_item(text, item_id)
-        updated = _bump_updated_text(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-        return updated, task_count
-
-    item_anchor = f"<!-- item:{item_id} -->"
-    lines = text.splitlines(keepends=True)
-
-    start_idx = None
-    for i, line in enumerate(lines):
-        if item_anchor in line:
-            start_idx = i
-            break
-    if start_idx is None:
-        raise ValueError(f"Item anchor not found: {item_anchor}")
-
-    # Find end: next ### Item: / #### Task: or next ## section boundary
-    end_idx = len(lines)
-    for i in range(start_idx + 1, len(lines)):
-        stripped = lines[i].strip()
-        if stripped.startswith("### Item:") or stripped.startswith("## "):
-            end_idx = i
-            break
-
-    task_count = sum(1 for j in range(start_idx, end_idx) if "<!-- task:" in lines[j])
-
-    # Build result, trimming trailing blanks before the next heading
-    result_lines = lines[:start_idx]
-    while result_lines and result_lines[-1].strip() == "":
-        result_lines.pop()
-    result_lines.append("\n")
-    result_lines.extend(lines[end_idx:])
-
-    updated = "".join(result_lines)
+    items = parse_work_map(text)
+    target = next((it for it in items if it["item_id"] == item_id), None)
+    if target is None:
+        raise ValueError(f"Item anchor not found: <!-- item:{item_id} -->")
+    task_count = len(target["tasks"])
+    updated = wm_delete_item(text, item_id)
     updated = _bump_updated_text(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     return updated, task_count
 
@@ -1702,39 +1668,7 @@ def _delete_task_block(text: str, task_id: str) -> str:
     same as _delete_item_block — not a fixed line-count offset.
     Timeline events referencing this task_id are preserved.
     """
-    if schema_version(text) >= 2:
-        updated = wm_delete_task(text, task_id)
-        return _bump_updated_text(updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-
-    task_anchor = f"<!-- task:{task_id} -->"
-    lines = text.splitlines(keepends=True)
-
-    start_idx = None
-    for i, line in enumerate(lines):
-        if task_anchor in line:
-            start_idx = i
-            break
-    if start_idx is None:
-        raise ValueError(f"Task anchor not found: {task_anchor}")
-
-    # Find end: next heading (#### Task:, ### Item:) or next ## section boundary
-    end_idx = len(lines)
-    for i in range(start_idx + 1, len(lines)):
-        stripped = lines[i].strip()
-        if (stripped.startswith("#### Task:") or
-                stripped.startswith("### Item:") or
-                stripped.startswith("## ")):
-            end_idx = i
-            break
-
-    # Build result, trimming trailing blanks before the next heading
-    result_lines = lines[:start_idx]
-    while result_lines and result_lines[-1].strip() == "":
-        result_lines.pop()
-    result_lines.append("\n")
-    result_lines.extend(lines[end_idx:])
-
-    result = "".join(result_lines)
+    result = wm_delete_task(text, task_id)
     return _bump_updated_text(
         result, datetime.now(timezone.utc).strftime("%Y-%m-%d")
     )
@@ -1771,80 +1705,13 @@ def _update_item_block(
     text: str, item_id: str, new_title: str, background: str | None,
 ) -> str:
     """Update an item — title and/or background. Preserves the anchor id."""
-    item_anchor = f"<!-- item:{item_id} -->"
-    if item_anchor not in text:
-        raise ValueError(f"Item anchor not found: {item_anchor}")
-
-    if schema_version(text) >= 2:
-        updated = wm_update_item(text, item_id, new_title, background)
-        return _bump_updated_text(
-            updated, datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        )
-
-    # 1. Rename title
-    pattern = rf"(### Item:\s+).+?(\s*<!--\s*item:{re.escape(item_id)}\s*-->)"
-    updated = re.sub(pattern, lambda m: f"{m.group(1)}{new_title}{m.group(2)}", text, count=1)
-
-    # 2. Update background (if requested)
-    if background is not None:
-        updated = _set_item_background(updated, item_id, background)
-
-    # 3. If nothing changed, succeed as no-op (user opened edit modal and saved without changes)
+    updated = wm_update_item(text, item_id, new_title, background)
     if updated == text:
         return text
 
     return _bump_updated_text(
         updated, datetime.now(timezone.utc).strftime("%Y-%m-%d")
     )
-
-
-def _set_item_background(text: str, item_id: str, background: str) -> str:
-    """Insert, update, or remove the ``- background:`` line for *item_id*.
-
-    *background* is already stripped: empty string means "remove".
-    """
-    item_anchor = f"<!-- item:{item_id} -->"
-    lines = text.splitlines(keepends=True)
-
-    # Locate the item heading line
-    item_idx = None
-    for i, line in enumerate(lines):
-        if item_anchor in line:
-            item_idx = i
-            break
-    if item_idx is None:
-        raise ValueError(f"Item anchor not found: {item_anchor}")
-
-    # Find existing background line after the heading (before next heading)
-    bg_idx = None
-    for j in range(item_idx + 1, len(lines)):
-        stripped = lines[j].strip()
-        if (stripped.startswith("### ") or
-                stripped.startswith("#### ") or
-                stripped.startswith("## ")):
-            break
-        if re.match(r"^-\s*background:", stripped):
-            bg_idx = j
-            break
-
-    if background:
-        bg_line = f"- background: {background}\n"
-        if bg_idx is not None:
-            lines[bg_idx] = bg_line
-        else:
-            # Insert after item heading line, before next heading / blank line
-            insert_at = item_idx + 1
-            # Skip blank lines right after the heading
-            while insert_at < len(lines) and lines[insert_at].strip() == "":
-                insert_at += 1
-            lines.insert(insert_at, bg_line)
-    elif bg_idx is not None:
-        # Remove: drop the line and any trailing blank that follows
-        del lines[bg_idx]
-
-    return "".join(lines)
-
-
 # ── update_task ────────────────────────────────────────────
 
 def handle_complete_task(request: dict) -> dict:
@@ -1911,7 +1778,7 @@ def _update_task_attr(text: str, task_id: str, field: str, value: str) -> str:
     )
 
 
-def render_new_project_v2(
+def _generate_init_markdown(
     project_id: str, title: str, date_str: str, items_spec: list[dict],
     status: str = "active", phase: str = "planning",
 ) -> str:
@@ -1963,7 +1830,7 @@ def render_new_project_v2(
                     lines.append(f"#### [ ] 任务：{task_title} <!-- task:{task_id} -->")
                     lines.append("- 下一步：")
                     lines.append("- 结论：")
-                    lines.append(f"<!-- task-meta:last_event_id= -->")
+                    lines.append("<!-- task-meta:last_event_id= -->")
                     lines.append("")
                 if not item_spec.get("tasks"):
                     lines.append("")
@@ -1972,119 +1839,6 @@ def render_new_project_v2(
             lines.append("")
 
     return "\n".join(lines)
-
-
-def _generate_init_markdown(
-    project_id: str, title: str, date_str: str, items_spec: list[dict]
-) -> str:
-    """Legacy v1 init — preserved for test compatibility."""
-    lines: list[str] = []
-    lines.append("---")
-    lines.append(f"project_id: {project_id}")
-    lines.append(f"title: {title}")
-    lines.append("doc_kind: work_project")
-    lines.append(f"created: {date_str}")
-    lines.append(f"updated: {date_str}")
-    lines.append("---")
-    lines.append("")
-    lines.append(f"# {title}")
-    lines.append("")
-    lines.append("## Current Snapshot")
-    lines.append("")
-    lines.append("")
-    lines.append("## Work Map")
-    lines.append("")
-
-    existing_item_ids: set[str] = set()
-    existing_task_ids: set[str] = set()
-
-    for item_spec in items_spec:
-        item_title = item_spec.get("title", "")
-        item_id = make_unique_stable_id(item_title, existing_item_ids)
-        existing_item_ids.add(item_id)
-        lines.append(f"### Item: {item_title} <!-- item:{item_id} -->")
-        lines.append("")
-        for task_title in item_spec.get("tasks", []):
-            task_id = make_unique_stable_id(task_title, existing_task_ids)
-            existing_task_ids.add(task_id)
-            lines.append(f"#### Task: {task_title} <!-- task:{task_id} -->")
-            lines.append("- status: in_progress")
-            lines.append("- next_action: ")
-            lines.append("- conclusion: ")
-            lines.append(f"- last_event_id: ")
-            lines.append("")
-        if not item_spec.get("tasks"):
-            lines.append("")
-
-    lines.append("## Decisions")
-    lines.append("")
-    lines.append("")
-    lines.append("## Attachments")
-    lines.append("")
-    lines.append("")
-    lines.append("## Timeline")
-    lines.append("")
-    lines.append("")
-    lines.append("## Daily / Weekly Rollups")
-    lines.append("")
-    lines.append("")
-
-    return "\n".join(lines)
-
-
-def _insert_item_block(text: str, title: str, item_id: str, updated_date: str, background: str = "") -> str:
-    work_map_match = re.search(r"(## Work Map\s*\n)", text)
-    if not work_map_match:
-        raise ValueError("## Work Map section not found")
-
-    section_match = re.search(r"^## (?!Work Map\b).*$", text[work_map_match.end():], re.MULTILINE)
-    insert_pos = work_map_match.end() + section_match.start() if section_match else len(text)
-
-    prefix = text[:insert_pos].rstrip() + "\n\n"
-    suffix = text[insert_pos:].lstrip("\n")
-    block = f"### Item: {title} <!-- item:{item_id} -->\n"
-    if background:
-        block += f"- background: {background}\n"
-    block += "\n"
-    return _bump_updated_text(prefix + block + suffix, updated_date)
-
-
-def _insert_task_block(text: str, item_id: str, title: str, task_id: str, updated_date: str) -> str:
-    if schema_version(text) >= 2:
-        updated = wm_insert_task(text, item_id, task_id, title)
-        return _bump_updated_text(updated, updated_date)
-
-    item_anchor = f"<!-- item:{item_id} -->"
-    lines = text.splitlines(keepends=True)
-
-    item_idx = None
-    for idx, line in enumerate(lines):
-        if item_anchor in line:
-            item_idx = idx
-            break
-    if item_idx is None:
-        raise ValueError(f"Item anchor not found: {item_anchor}")
-
-    insert_idx = len(lines)
-    for idx in range(item_idx + 1, len(lines)):
-        stripped = lines[idx].strip()
-        if stripped.startswith("### Item:") or stripped.startswith("## "):
-            insert_idx = idx
-            break
-
-    new_lines = list(lines[:insert_idx])
-    if new_lines and new_lines[-1].strip() != "":
-        new_lines.append("\n")
-    new_lines.extend([
-        f"#### Task: {title} <!-- task:{task_id} -->\n",
-        "- status: in_progress\n",
-        "- next_action:\n",
-        "- conclusion:\n",
-        "- last_event_id:\n",
-        "\n",
-    ])
-    new_lines.extend(lines[insert_idx:])
-    return _bump_updated_text("".join(new_lines), updated_date)
 
 
 def _bump_updated_text(text: str, updated_date: str) -> str:
@@ -2123,140 +1877,26 @@ def _build_project_route_context(projects: list[dict]) -> str:
 
 
 
-# ── Work Map task parser ─────────────────────────────────
-
-def _parse_work_map_items(text: str) -> list[dict]:
-    """Parse ## Work Map item headings, including items that have no tasks yet.
-
-    Also captures optional ``- background:`` lines between the item heading and
-    the next heading (next Item / Task / section).
-    """
-    items: list[dict] = []
-    in_work_map = False
-    item_re = re.compile(r"^###\s+Item:\s+(.+?)\s*<!--\s*item:(.+?)\s*-->")
-    bg_re = re.compile(r"^-\s*background:\s*(.*)")
-
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped == "## Work Map":
-            in_work_map = True
-            continue
-        if in_work_map and stripped.startswith("## ") and stripped != "## Work Map":
-            break
-
-        if in_work_map:
-            match = item_re.match(line)
-            if match:
-                item: dict = {
-                    "item_id": match.group(2).strip(),
-                    "title": match.group(1).strip(),
-                }
-                # Look ahead for - background: before the next heading
-                for ahead in range(i + 1, len(lines)):
-                    next_stripped = lines[ahead].strip()
-                    if (next_stripped.startswith("### ") or
-                            next_stripped.startswith("#### ") or
-                            next_stripped.startswith("## ")):
-                        break
-                    bg_match = bg_re.match(next_stripped)
-                    if bg_match:
-                        bg_val = bg_match.group(1).strip()
-                        if bg_val:
-                            item["background"] = bg_val
-                        break
-                items.append(item)
-
-    return items
-
-
 def _parse_work_map_tasks(text: str) -> list[dict]:
-    """Parse ## Work Map section for item/task structure and current state."""
+    """Flatten the shared schema-aware Work Map representation."""
     tasks: list[dict] = []
-    in_work_map = False
-    current_item_id = ""
-    current_item_title = ""
-    current_task: dict | None = None
-
-    task_re = re.compile(r"^####\s+Task:\s+(.+?)\s*<!--\s*task:(.+?)\s*-->")
-    item_re = re.compile(r"^###\s+Item:\s+(.+?)\s*<!--\s*item:(.+?)\s*-->")
-    status_re = re.compile(r"^-\s*status:\s*(.*)")
-    next_action_re = re.compile(r"^-\s*next_action:\s*(.*)")
-    last_event_re = re.compile(r"^-\s*last_event_id:\s*(.*)")
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped == "## Work Map":
-            in_work_map = True
-            continue
-        if in_work_map and stripped.startswith("## ") and stripped != "## Work Map":
-            break
-
-        if in_work_map:
-            im = item_re.match(line)
-            if im:
-                if current_task:
-                    tasks.append(current_task)
-                current_item_title = im.group(1).strip()
-                current_item_id = im.group(2).strip()
-                current_task = None
-                continue
-
-            tm = task_re.match(line)
-            if tm:
-                if current_task:
-                    tasks.append(current_task)
-                current_task = {
-                    "task_id": tm.group(2).strip(),
-                    "item_id": current_item_id,
-                    "item_title": current_item_title,
-                    "title": tm.group(1).strip(),
-                    "status": "",
-                    "next_action": "",
-                    "last_event_id": "",
-                }
-                continue
-
-            if current_task is not None:
-                sm = status_re.match(line)
-                if sm:
-                    current_task["status"] = sm.group(1).strip()
-                    continue
-                nm = next_action_re.match(line)
-                if nm:
-                    current_task["next_action"] = nm.group(1).strip()
-                    continue
-                em = last_event_re.match(line)
-                if em:
-                    current_task["last_event_id"] = em.group(1).strip()
-                    continue
-
-    if current_task:
-        tasks.append(current_task)
-
+    for item in parse_work_map(text):
+        for task in item.get("tasks", []):
+            tasks.append({
+                **task,
+                "item_id": item["item_id"],
+                "item_title": item["title"],
+            })
     return tasks
 
 
 def _parse_attachments_task_ids(text: str) -> set[str]:
-    """Parse ## Attachments section and return set of task_ids with attachments."""
-    task_ids: set[str] = set()
-    in_attachments = False
-    related_re = re.compile(r"^\s*-\s*related_task_id:\s*(.*)")
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped == "## Attachments":
-            in_attachments = True
-            continue
-        if in_attachments and stripped.startswith("## ") and stripped != "## Attachments":
-            break
-
-        if in_attachments:
-            m = related_re.match(line)
-            if m:
-                task_ids.add(m.group(1).strip())
-
-    return task_ids
+    """Return task IDs from the shared schema-aware attachment parser."""
+    return {
+        record["related_task_id"]
+        for record in parse_attachment_records(text)
+        if record.get("related_task_id")
+    }
 
 
 # ── Helpers (duplicated from cli.py to keep gui.py self-contained) ──

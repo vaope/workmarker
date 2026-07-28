@@ -416,12 +416,13 @@ function attachIpc() {
     return callBackend('init', { ...spec, workspace: c.workspace, db_path: dbPathFor(c.workspace) }, c.pythonCmd);
   });
 
-  ipcMain.handle('wea:createItem', async (_e, { projectPath, title }) => {
+  ipcMain.handle('wea:createItem', async (_e, { projectPath, title, background }) => {
     const c = cfg();
     return callBackend('create_item', {
       project_path: projectPath,
       db_path: dbPathFor(c.workspace),
       title,
+      background,
     }, c.pythonCmd);
   });
 

@@ -153,6 +153,36 @@ updated: 2026-07-23
             ],
         )
 
+    def test_rebuild_indexes_v2_anchored_attachments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "workeventagent.sqlite"
+            project_path = Path(tmp) / "project-v2.md"
+            project_path.write_text(
+                Path("tests/fixtures/project-v2.md").read_text(encoding="utf-8").replace(
+                    "attachments/2026-07-13/screenshot.png",
+                    "attachments/2026-07-13/setup screenshot.png",
+                ),
+                encoding="utf-8",
+            )
+
+            init_db(db_path)
+            rebuild_index(db_path, [project_path])
+
+            conn = sqlite3.connect(db_path)
+            row = conn.execute(
+                "SELECT path, task_id, note FROM attachments"
+            ).fetchone()
+            conn.close()
+
+        self.assertEqual(
+            row,
+            (
+                "attachments/2026-07-13/setup screenshot.png",
+                "",
+                "Initial setup screenshot.",
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

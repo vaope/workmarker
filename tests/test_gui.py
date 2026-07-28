@@ -2,7 +2,7 @@ import json
 import re
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,7 +35,7 @@ from workeventagent.gui import (
     handle_inbox_cancel,
     handle_search,
 )
-from workeventagent.project_schema import parse_timeline_events
+from workeventagent.project_schema import parse_timeline_events, section_content
 from workeventagent.inbox_store import list_captures, update_capture
 from workeventagent.knowledge_store import (
     enqueue_job,
@@ -786,13 +786,14 @@ class InitTest(unittest.TestCase):
             text = project_path.read_text(encoding="utf-8")
             self.assertIn("project_id: test-project", text)
             self.assertIn("doc_kind: work_project", text)
-            self.assertIn("## Work Map", text)
-            self.assertIn("## Timeline", text)
-            self.assertIn("## Attachments", text)
+            self.assertIn("schema_version: 2", text)
+            self.assertIn("## 工作地图 <!-- section:work-map -->", text)
+            self.assertIn("## 事件证据 <!-- section:timeline -->", text)
+            self.assertIn("## 附件 <!-- section:attachments -->", text)
             self.assertIn("<!-- item:item-one -->", text)
             self.assertIn("<!-- task:task-a -->", text)
             self.assertIn("<!-- task:task-b -->", text)
-            self.assertEqual(text.count("- conclusion:"), 2)
+            self.assertEqual(text.count("- 结论："), 2)
 
             # Verify attachments dir was created
             self.assertTrue((workspace / "attachments").is_dir())
@@ -871,11 +872,41 @@ class InitTest(unittest.TestCase):
             self.assertTrue(project_path.exists())
 
             text = project_path.read_text(encoding="utf-8")
-            self.assertIn("## Work Map", text)
-            self.assertIn("## Timeline", text)
+            self.assertIn("## 工作地图 <!-- section:work-map -->", text)
+            self.assertIn("## 事件证据 <!-- section:timeline -->", text)
 
 
 class ManualCreateTest(unittest.TestCase):
+    def test_create_item_v2_uses_anchored_work_map_and_preserves_background(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            db_path = workspace / "index.sqlite"
+            init = handle_init({
+                "workspace": str(workspace),
+                "title": "Manual V2 Project",
+                "project_id": "manual-v2-project",
+                "db_path": str(db_path),
+                "schema_version": 2,
+                "items": [],
+            })
+            project_path = Path(init["project_path"])
+
+            result = handle_create_item({
+                "project_path": str(project_path),
+                "db_path": str(db_path),
+                "title": "知识学习",
+                "background": "建立长期知识体系",
+            })
+            items = handle_tasks({"project_path": str(project_path)})["items"]
+            text = project_path.read_text(encoding="utf-8")
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(items[0]["title"], "知识学习")
+        self.assertEqual(items[0]["background"], "建立长期知识体系")
+        self.assertIn("## 工作地图 <!-- section:work-map -->", text)
+        self.assertIn("### 工作项：知识学习", text)
+        self.assertNotIn("## Work Map", text)
+
     def test_create_item_adds_visible_empty_item_and_rebuilds_index(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -934,7 +965,7 @@ class ManualCreateTest(unittest.TestCase):
         self.assertTrue(second["ok"])
         self.assertEqual(second["task_id"], f"{first['task_id']}-2")
         self.assertEqual([task["task_id"] for task in tasks], [first["task_id"], second["task_id"]])
-        self.assertEqual(text.count("- conclusion:"), 2)
+        self.assertEqual(text.count("- 结论："), 2)
 
     def test_create_task_v2_stays_in_target_item_and_renders_conclusion(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -972,6 +1003,23 @@ class ManualCreateTest(unittest.TestCase):
 # ── generate_init_markdown ───────────────────────────────
 
 class GenerateInitMarkdownTest(unittest.TestCase):
+    def test_default_init_uses_only_current_v2_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            result = handle_init({
+                "workspace": str(workspace),
+                "title": "Current Project",
+                "project_id": "current-project",
+                "db_path": str(workspace / "index.sqlite"),
+                "items": [{"title": "Item 1", "tasks": ["Task A"]}],
+            })
+            text = Path(result["project_path"]).read_text(encoding="utf-8")
+
+        self.assertTrue(result["ok"], result)
+        self.assertIn("schema_version: 2", text)
+        self.assertIn("## 工作地图 <!-- section:work-map -->", text)
+        self.assertNotIn("## Work Map", text)
+
     def test_generates_complete_schema(self):
         md = _generate_init_markdown(
             "test-proj", "Test Project", "2026-07-01",
@@ -979,15 +1027,16 @@ class GenerateInitMarkdownTest(unittest.TestCase):
         )
         self.assertIn("project_id: test-proj", md)
         self.assertIn("doc_kind: work_project", md)
-        self.assertIn("## Current Snapshot", md)
-        self.assertIn("## Work Map", md)
-        self.assertIn("## Decisions", md)
-        self.assertIn("## Attachments", md)
-        self.assertIn("## Timeline", md)
-        self.assertIn("## Daily / Weekly Rollups", md)
-        self.assertIn("### Item: Item 1 <!-- item:item-1 -->", md)
-        self.assertIn("#### Task: Task A <!-- task:task-a -->", md)
-        self.assertIn("- status: in_progress", md)
+        self.assertIn("schema_version: 2", md)
+        self.assertIn("## 当前全景 <!-- section:current-panorama -->", md)
+        self.assertIn("## 工作地图 <!-- section:work-map -->", md)
+        self.assertIn("## 关键决策 <!-- section:decisions -->", md)
+        self.assertIn("## 附件 <!-- section:attachments -->", md)
+        self.assertIn("## 事件证据 <!-- section:timeline -->", md)
+        self.assertIn("## 历史摘要 <!-- section:rollups -->", md)
+        self.assertIn("### 工作项：Item 1 <!-- item:item-1 -->", md)
+        self.assertIn("#### [ ] 任务：Task A <!-- task:task-a -->", md)
+        self.assertIn("- 下一步：", md)
 
     def test_duplicate_init_titles_get_unique_anchors(self):
         md = _generate_init_markdown(
@@ -1221,16 +1270,18 @@ class DeleteTaskTest(unittest.TestCase):
             # Manually inject a non-canonical task with multi-line next_action
             text = proj.read_text(encoding="utf-8")
             non_canonical = (
-                "#### Task: Multi-line Task <!-- task:ml-t1 -->\n"
-                "- status: in_progress\n"
-                "- next_action: |\n"
+                "#### [ ] 任务：Multi-line Task <!-- task:ml-t1 -->\n"
+                "- 下一步：|\n"
                 "  Line 1 of action\n"
                 "  Line 2 of action\n"
-                "- last_event_id:\n"
+                "- 结论：\n"
+                "<!-- task-meta:last_event_id= -->\n"
                 "\n"
             )
-            # Insert before the end of Work Map (before ## Decisions or EOF)
-            text = text.replace("## Decisions", non_canonical + "## Decisions")
+            text = text.replace(
+                "## 技术概览 <!-- section:technical-overview -->",
+                non_canonical + "## 技术概览 <!-- section:technical-overview -->",
+            )
             write_project_atomically(proj, text)
             init_db(db)
             rebuild_index(db, [proj])
@@ -1295,7 +1346,7 @@ class UpdateItemTest(unittest.TestCase):
 
             # Verify markdown: title changed, anchor unchanged
             text = proj.read_text(encoding="utf-8")
-            self.assertIn("### Item: New Item Name <!-- item:" + item_id, text)
+            self.assertIn("### 工作项：New Item Name <!-- item:" + item_id, text)
             self.assertNotIn(old_title, text)
 
             # Verify parser round-trip
@@ -1451,7 +1502,8 @@ class ItemBackgroundTests(unittest.TestCase):
             self.assertTrue(result["ok"])
 
             text = proj.read_text(encoding="utf-8")
-            self.assertIn("- background: 解释为什么做这个需求", text)
+            self.assertIn("解释为什么做这个需求", text)
+            self.assertNotIn("- background:", text)
 
             items = handle_tasks({"project_path": str(proj)})["items"]
             bg_item = next(it for it in items if it["title"] == "With BG")
@@ -1486,7 +1538,8 @@ class ItemBackgroundTests(unittest.TestCase):
             self.assertTrue(result["ok"])
 
             text = proj.read_text(encoding="utf-8")
-            self.assertIn("- background: 新的背景说明", text)
+            self.assertIn("新的背景说明", text)
+            self.assertNotIn("- background:", text)
 
             after = handle_tasks({"project_path": str(proj)})["items"]
             self.assertEqual(after[0]["background"], "新的背景说明")
@@ -1518,9 +1571,8 @@ class ItemBackgroundTests(unittest.TestCase):
 
             text = proj.read_text(encoding="utf-8")
             self.assertNotIn("原始背景", text)
-            self.assertIn("- background: 更新后的背景", text)
-            # Only one background line
-            self.assertEqual(text.count("- background:"), 1)
+            self.assertIn("更新后的背景", text)
+            self.assertNotIn("- background:", text)
         finally:
             tmp.cleanup()
 
@@ -1546,7 +1598,7 @@ class ItemBackgroundTests(unittest.TestCase):
             self.assertTrue(result["ok"])
 
             text = proj.read_text(encoding="utf-8")
-            self.assertNotIn("- background:", text)
+            self.assertNotIn("待清除", text)
 
             after = handle_tasks({"project_path": str(proj)})["items"]
             self.assertEqual(after[0]["background"], "")
@@ -1574,8 +1626,8 @@ class ItemBackgroundTests(unittest.TestCase):
             self.assertTrue(result["ok"])
 
             text = proj.read_text(encoding="utf-8")
-            self.assertIn("- background: 保持不变", text)
-            self.assertIn("### Item: Renamed Only", text)
+            self.assertIn("保持不变", text)
+            self.assertIn("### 工作项：Renamed Only", text)
         finally:
             tmp.cleanup()
 
@@ -1759,7 +1811,7 @@ class UpdateTaskTest(unittest.TestCase):
         try:
             task = handle_tasks({"project_path": str(proj)})["items"][0]["tasks"][0]
             before_text = proj.read_text(encoding="utf-8")
-            before_timeline = before_text.split("## Timeline", 1)[1]
+            before_timeline = section_content(before_text, "timeline")
 
             result = handle_complete_task({
                 "project_path": str(proj),
@@ -1771,7 +1823,7 @@ class UpdateTaskTest(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             after_text = proj.read_text(encoding="utf-8")
-            self.assertEqual(after_text.split("## Timeline", 1)[1], before_timeline)
+            self.assertEqual(section_content(after_text, "timeline"), before_timeline)
             self.assertEqual(
                 handle_tasks({"project_path": str(proj)})["items"][0]["tasks"][0]["status"],
                 "done",
@@ -3135,6 +3187,9 @@ class V2ProjectReadTest(unittest.TestCase):
         events = result["events"]
         self.assertEqual(len(events), 2)
         self.assertIn("event-a", [e["event_id"] for e in events])
+        event_a = next(event for event in events if event["event_id"] == "event-a")
+        self.assertEqual(event_a["item_id"], "capture")
+        self.assertEqual(event_a["task_title"], "Persist card")
 
     def test_v2_sqlite_rebuild_and_readback(self):
         rebuild_index(self.db, [self.project])
@@ -3432,7 +3487,7 @@ class V2MutationTest(unittest.TestCase):
         self.assertIn("<!-- task:weekly-summary -->", text)
 
     def test_update_item_v2_set_background(self):
-        """Setting background on v2 item injects a - background: line."""
+        """Setting background on v2 item uses canonical prose."""
         result = handle_update_item({
             "project_path": str(self.project),
             "db_path": str(self.db),
@@ -3443,11 +3498,12 @@ class V2MutationTest(unittest.TestCase):
         self.assertTrue(result["ok"], result)
 
         text = self.project.read_text(encoding="utf-8")
-        self.assertIn("- background: Generate daily and weekly reports.", text)
+        self.assertIn("Generate daily and weekly reports.", text)
+        self.assertNotIn("- background:", text)
         self.assertIn("### 工作项：Reporting <!-- item:reporting -->", text)
 
     def test_update_item_v2_clear_background(self):
-        """Clearing background on v2 item removes the - background: line."""
+        """Clearing background on v2 item removes the prose."""
         # First set it
         handle_update_item({
             "project_path": str(self.project),
@@ -3457,7 +3513,7 @@ class V2MutationTest(unittest.TestCase):
             "background": "Generate reports.",
         })
         text_after_set = self.project.read_text(encoding="utf-8")
-        self.assertIn("- background: Generate reports.", text_after_set)
+        self.assertIn("Generate reports.", text_after_set)
 
         # Then clear it
         result = handle_update_item({
@@ -3470,7 +3526,7 @@ class V2MutationTest(unittest.TestCase):
         self.assertTrue(result["ok"], result)
 
         text = self.project.read_text(encoding="utf-8")
-        self.assertNotIn("- background:", text)
+        self.assertNotIn("Generate reports.", text)
         self.assertIn("### 工作项：Reporting <!-- item:reporting -->", text)
 
     def test_update_item_v2_title_only_does_not_affect_background(self):
@@ -3494,7 +3550,8 @@ class V2MutationTest(unittest.TestCase):
 
         text = self.project.read_text(encoding="utf-8")
         self.assertIn("### 工作项：Report Gen v2 <!-- item:reporting -->", text)
-        self.assertIn("- background: Generate reports.", text)
+        self.assertIn("Generate reports.", text)
+        self.assertNotIn("- background:", text)
 
 
 if __name__ == "__main__":

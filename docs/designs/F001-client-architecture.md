@@ -156,7 +156,7 @@ Electron 客户端 (client/)
  "items":[{"title":"使用 KV cache 优化 few-shot","tasks":["查看当前阻塞点","KV cache 原理解读"]}],
  "db_path":"D:/worklogs/index.sqlite"}
 ```
-处理：按 WORKLOG_SCHEMA 生成标准 Markdown（frontmatter + 6 段：Current Snapshot/Work Map/Decisions/Attachments/Timeline/Daily-Weekly Rollups；item/task 带 anchor，task 初始 `status: in_progress` / `next_action:` / `last_event_id:`）→ 写 `<workspace>/<project_id>.md` → 创建 `<workspace>/attachments/` → init_db + rebuild_index → 回读校验可解析。
+处理：始终按 WORKLOG_SCHEMA 生成 schema v2 Markdown（9 个带稳定 `section:*` 锚点的区块；工作地图 item/task 带稳定 anchor，任务使用 checkbox、`下一步`、`结论` 和隐藏 `task-meta`）→ 写 `<workspace>/<project_id>.md` → 创建 `<workspace>/attachments/` → init_db + rebuild_index → 回读校验可解析。调用方不能选择旧版输出格式。
 - `project_id` 缺省由 `make_stable_id(title)` 生成；前端可覆盖。
 - 已存在同名 `project_id` → `{"ok":false,"kind":"exists"}`，不覆盖。
 响应：`{"ok":true,"project_path":"...","project_id":"..."}`
@@ -165,7 +165,7 @@ Electron 客户端 (client/)
 
 请求：`{"project_path":"...","db_path":"...","title":"明确项目需求"}`
 
-处理：读取项目 Markdown → 基于现有 `<!-- item:... -->` 锚点用 `make_unique_stable_id` 生成全项目唯一 `item_id` → 在 `## Work Map` 末尾插入标准 `### Item: <title> <!-- item:<item_id> -->` 块 → bump frontmatter `updated:` → 原子写 Markdown → `init_db + rebuild_index`。
+处理：读取项目 Markdown → 基于现有 `<!-- item:... -->` 锚点用 `make_unique_stable_id` 生成全项目唯一 `item_id` → 通过共享 Work Map store 和 `section:work-map` 稳定锚点插入当前 schema 的标准工作项块 → bump frontmatter `updated:` → 原子写 Markdown → `init_db + rebuild_index`。不得匹配 `Work Map`/`工作地图` 等可见标题。
 
 响应：`{"ok":true,"item_id":"...","title":"明确项目需求"}`
 
@@ -178,13 +178,13 @@ Electron 客户端 (client/)
 
 请求：`{"project_path":"...","db_path":"...","item_id":"...","title":"梳理推理链路"}`
 
-处理：读取项目 Markdown → 校验目标 item anchor 存在 → 基于现有 `<!-- task:... -->` 锚点用 `make_unique_stable_id` 生成全项目唯一 `task_id` → 在目标 Item 下插入标准 Task 块：
+处理：读取项目 Markdown → 校验目标 item anchor 存在 → 基于现有 `<!-- task:... -->` 锚点用 `make_unique_stable_id` 生成全项目唯一 `task_id` → 通过共享 Work Map store 在目标 Item 末尾插入 schema v2 Task 块：
 
 ```markdown
-#### Task: 梳理推理链路 <!-- task:... -->
-- status: in_progress
-- next_action:
-- last_event_id:
+#### [ ] 任务：梳理推理链路 <!-- task:... -->
+- 下一步：
+- 结论：
+<!-- task-meta:last_event_id= -->
 ```
 
 然后 bump `updated:` → 原子写 Markdown → `init_db + rebuild_index`。

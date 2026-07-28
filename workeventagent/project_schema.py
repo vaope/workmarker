@@ -191,7 +191,7 @@ def parse_timeline_events(text: str) -> list[dict]:
 
 # ── Attachment parser ───────────────────────────────────────
 
-_ATTACHMENT_LINE_RE = re.compile(r"^-\s+(\S+)\s*<!--\s*attachment:(.+?)\s*-->")
+_ATTACHMENT_LINE_RE = re.compile(r"^-\s+(.+?)\s+<!--\s*attachment:(.+?)\s*-->")
 _V1_ATTACH_TS_RE = re.compile(r"^-\s+(\d{4}-\d{2}-\d{2}T.+)$")
 
 

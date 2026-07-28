@@ -6,8 +6,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from workeventagent.models import ArchiveProposal
-from workeventagent.project_schema import schema_version
-from workeventagent.work_map_store import render_v1_task, render_v2_task, update_task_state
+from workeventagent.ids import make_stable_id
+from workeventagent.project_schema import find_section, schema_version
+from workeventagent.work_map_store import (
+    insert_item,
+    insert_task,
+    parse_work_map,
+    update_task_state,
+)
 
 
 class ProjectDocument:
@@ -51,45 +57,27 @@ class ProjectDocument:
         return body
 
     def insert_new_task(self, proposal: ArchiveProposal) -> str:
-        item_id = proposal.target.item_id
-        item_anchor = f"<!-- item:{item_id} -->"
-
-        # Find item heading line number in body
-        item_line_idx = None
-        body_lines = self._body_lines
-        for i, line in enumerate(body_lines):
-            if item_anchor in line:
-                item_line_idx = i
-                break
-
-        if item_line_idx is None:
-            if proposal.target.new_item:
-                return self._insert_new_item_with_task(proposal)
-            raise ValueError(f"Item anchor not found: {item_anchor}")
-
-        # Find insertion point: after the item heading, before next heading
-        insert_idx = item_line_idx + 1
-        for j in range(item_line_idx + 1, len(body_lines)):
-            stripped = body_lines[j].strip()
-            if (stripped.startswith("#### Task:") or stripped.startswith("#### [") or
-                    stripped.startswith("### Item:") or stripped.startswith("### 工作项") or
-                    stripped.startswith("## ")):
-                insert_idx = j
-                break
-        else:
-            insert_idx = len(body_lines)
-
-        # Render task block from structured fields
-        task_block = self._render_new_task_block(proposal)
-
-        new_lines = (
-            body_lines[:insert_idx]
-            + [task_block + "\n"]
-            + (["\n"] if insert_idx < len(body_lines) and body_lines[insert_idx - 1].strip() != "" else [])
-            + body_lines[insert_idx:]
+        target = proposal.target
+        event = proposal.event
+        updated = "".join(["---\n", self.frontmatter, "\n---", self.body])
+        item_exists = any(
+            item["item_id"] == target.item_id
+            for item in parse_work_map(updated)
         )
-
-        return "".join(["---\n", self.frontmatter, "\n---", "".join(new_lines)])
+        if target.new_item and not item_exists:
+            updated = insert_item(
+                updated,
+                target.item_id,
+                target.item_title or target.item_id,
+            )
+        updated = insert_task(updated, target.item_id, target.task_id, target.task_title)
+        return update_task_state(
+            updated,
+            target.task_id,
+            event.status,
+            event.next_action,
+            event.event_id,
+        )
 
     # --- internal helpers ---
 
@@ -118,13 +106,7 @@ class ProjectDocument:
             f"{self._render_timeline_field('status', event.status)}"
             f"{self._render_timeline_field('next_action', event.next_action)}"
         )
-        # Find Timeline section in body (v1 or v2)
-        timeline_match = re.search(r"## Timeline\n", body)
-        if not timeline_match:
-            timeline_match = re.search(r"## 事件证据.*\n", body)
-        if not timeline_match:
-            raise ValueError("Timeline section not found")
-        insert_pos = timeline_match.end()
+        insert_pos = find_section(body, "timeline").content_start
         return body[:insert_pos] + timeline_entry + body[insert_pos:]
 
     def _bump_updated(self, body: str, updated_date: str) -> str:
@@ -134,44 +116,6 @@ class ProjectDocument:
             body,
             count=1,
         )
-
-    def _render_new_task_block(self, proposal: ArchiveProposal) -> str:
-        event = proposal.event
-        target = proposal.target
-        full_text = "".join(["---\n", self.frontmatter, "\n---", "".join(self._body_lines)])
-        renderer = render_v2_task if schema_version(full_text) >= 2 else render_v1_task
-        return renderer({
-            "task_id": target.task_id,
-            "title": target.task_title,
-            "status": event.status,
-            "next_action": event.next_action,
-            "conclusion": "",
-            "last_event_id": event.event_id,
-        })
-
-    def _insert_new_item_with_task(self, proposal: ArchiveProposal) -> str:
-        target = proposal.target
-        work_map_match = re.search(r"^##.*(?:Work Map|工作地图).*\n", self.body, re.MULTILINE)
-        if not work_map_match:
-            raise ValueError("Work Map section not found")
-
-        section_match = re.search(r"^## (?!.*(?:Work Map|工作地图)).*$", self.body[work_map_match.end():], re.MULTILINE)
-        insert_pos = work_map_match.end() + section_match.start() if section_match else len(self.body)
-        item_title = target.item_title or target.item_id
-        full_text = "".join(["---\n", self.frontmatter, "\n---", self.body])
-        if schema_version(full_text) >= 2:
-            block = (
-                f"### 工作项：{item_title} <!-- item:{target.item_id} -->\n\n"
-                f"{self._render_new_task_block(proposal)}\n\n"
-            )
-        else:
-            block = (
-                f"### Item: {item_title} <!-- item:{target.item_id} -->\n"
-                f"{self._render_new_task_block(proposal)}\n\n"
-            )
-        prefix = self.body[:insert_pos].rstrip() + "\n\n"
-        suffix = self.body[insert_pos:].lstrip("\n")
-        return "".join(["---\n", self.frontmatter, "\n---", prefix, block, suffix])
 
     @staticmethod
     def _render_timeline_field(key: str, value: object) -> str:
@@ -191,23 +135,27 @@ class ProjectDocument:
         if not proposal.attachment_paths:
             return body
 
-        attach_match = re.search(r"(## Attachments\s*\n)", body)
-        if not attach_match:
-            return body  # no section yet — skip rather than create (MVP)
-
         if now is None:
             now = datetime.now(timezone.utc)
         ts = now.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
-        insert_pos = attach_match.end()
+        insert_pos = find_section(body, "attachments").content_start
         entries = ""
         for path in proposal.attachment_paths:
-            entries += (
-                f"- {ts}\n"
-                f"  - path: {path}\n"
-                f"  - related_task_id: {proposal.target.task_id}\n"
-                f"  - note: \n\n"
-            )
+            if schema_version(body) >= 2:
+                attachment_id = make_stable_id(f"{ts}-{path}")
+                entries += (
+                    f"- {path} <!-- attachment:{attachment_id} -->\n"
+                    f"  - related_task_id: {proposal.target.task_id}\n"
+                    f"  - note: \n\n"
+                )
+            else:
+                entries += (
+                    f"- {ts}\n"
+                    f"  - path: {path}\n"
+                    f"  - related_task_id: {proposal.target.task_id}\n"
+                    f"  - note: \n\n"
+                )
         return body[:insert_pos] + entries + body[insert_pos:]
 
 

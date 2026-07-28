@@ -1,10 +1,15 @@
 import unittest
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from workeventagent.markdown_store import ProjectDocument, write_project_atomically
 from workeventagent.models import ArchiveProposal, TargetRef, TimelineEvent
-from workeventagent.project_schema import schema_version, section_content
+from workeventagent.project_schema import (
+    parse_attachment_records,
+    schema_version,
+    section_content,
+)
 from workeventagent.work_map_store import parse_work_map
 
 FIXTURE = Path("tests/fixtures/multimodal-labeling.md")
@@ -205,6 +210,96 @@ class V2MarkdownStoreTest(unittest.TestCase):
 
         assert "#### [x] 任务：Route archive <!-- task:route-archive -->" in updated
         assert updated.count("<!-- task:route-archive -->") == 1
+
+    def test_v2_new_item_and_task_use_anchored_work_map(self):
+        original = V2_FIXTURE.read_text(encoding="utf-8")
+        proposal = ArchiveProposal(
+            target=TargetRef(
+                project_id="report-project",
+                item_id="knowledge",
+                item_title="知识学习",
+                task_id="review-notes",
+                task_title="Review notes",
+                new_item=True,
+                new_task=True,
+            ),
+            confidence=1.0,
+            reason="new v2 work stream",
+            event=TimelineEvent(
+                event_id="20260713-140000000-review-notes",
+                task_id="review-notes",
+                input_text="Start reviewing notes.",
+                summary="Review stream created.",
+                status="in_progress",
+                next_action="Read the first note.",
+            ),
+        )
+
+        updated = ProjectDocument.from_text(original).insert_new_task(proposal)
+        items = parse_work_map(updated)
+
+        assert items[-1]["item_id"] == "knowledge"
+        assert items[-1]["tasks"][0]["task_id"] == "review-notes"
+        assert "### 工作项：知识学习 <!-- item:knowledge -->" in updated
+        assert "#### [ ] 任务：Review notes <!-- task:review-notes -->" in updated
+
+    def test_new_item_flag_reuses_existing_item_anchor(self):
+        original = V2_FIXTURE.read_text(encoding="utf-8")
+        proposal = ArchiveProposal(
+            target=TargetRef(
+                project_id="report-project",
+                item_id="capture",
+                item_title="Capture",
+                task_id="capture-follow-up",
+                task_title="Capture follow-up",
+                new_item=True,
+                new_task=True,
+            ),
+            confidence=1.0,
+            reason="stale new-item flag",
+            event=TimelineEvent(
+                event_id="20260713-150000000-capture-follow-up",
+                task_id="capture-follow-up",
+                input_text="Continue capture.",
+                summary="Follow-up created.",
+                status="in_progress",
+                next_action="Review capture.",
+            ),
+        )
+
+        updated = ProjectDocument.from_text(original).insert_new_task(proposal)
+        items = parse_work_map(updated)
+
+        assert updated.count("<!-- item:capture -->") == 1
+        capture = next(item for item in items if item["item_id"] == "capture")
+        assert capture["tasks"][-1]["task_id"] == "capture-follow-up"
+
+    def test_v2_attachments_append_to_anchored_section(self):
+        original = V2_FIXTURE.read_text(encoding="utf-8")
+        proposal = replace(
+            self.v2_proposal(),
+            attachment_paths=("attachments/persist-card/evidence.png",),
+        )
+
+        updated = ProjectDocument.append_attachments(original, proposal)
+
+        assert "attachments/persist-card/evidence.png" in section_content(updated, "attachments")
+
+    def test_v2_attachment_path_with_spaces_round_trips(self):
+        original = V2_FIXTURE.read_text(encoding="utf-8")
+        proposal = replace(
+            self.v2_proposal(),
+            attachment_paths=("attachments/persist card/evidence file.png",),
+        )
+
+        updated = ProjectDocument.append_attachments(original, proposal)
+        records = parse_attachment_records(updated)
+
+        record = next(
+            item for item in records
+            if item["path"] == "attachments/persist card/evidence file.png"
+        )
+        assert record["related_task_id"] == "persist-card"
 
 
 if __name__ == "__main__":

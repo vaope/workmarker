@@ -2,7 +2,7 @@
 topics: [worklog-schema, markdown, agent-protocol]
 doc_kind: protocol
 created: 2026-06-29
-updated: 2026-07-13
+updated: 2026-07-29
 ---
 
 # Worklog Schema
@@ -13,7 +13,9 @@ This file is the operation protocol for WorkEventAgent. Project Markdown files a
 
 ## Schema Version
 
-The current protocol is **schema v2**. New projects use `schema_version: 2`. Existing v1 projects (`schema_version` missing or `1`) remain readable and writable until explicit migration; see "v1 Compatibility" below.
+The current protocol is **schema v2**. Every project created by any client or backend entry point uses `schema_version: 2`; callers cannot select a legacy output format. Existing v1 projects (`schema_version` missing or `1`) remain readable and writable until explicit migration; see "v1 Compatibility" below.
+
+All Work Map, Timeline, and Attachments reads and writes go through the shared schema-aware stores. V2 section lookup uses stable `section:*` anchors, never visible heading text. V1 handling exists only inside those compatibility stores so feature entry points cannot drift into separate v1/v2 implementations.
 
 ---
 

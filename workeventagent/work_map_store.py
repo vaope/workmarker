@@ -67,13 +67,13 @@ def parse_work_map(text: str, strict: bool = False) -> list[dict]:
         current_task = None
 
     def _flush_item() -> None:
-        nonlocal current_item
+        nonlocal current_item, in_background
         if current_item is None:
             return
         _flush_task()
         items.append(current_item)
         current_item = None
-        in_background = False  # type: ignore[assignment]
+        in_background = False
 
     for line in lines:
         stripped = line.strip()
@@ -431,12 +431,10 @@ def insert_item(text: str, item_id: str, title: str, background: str = "") -> st
     else:
         bg_line = f"- background: {background}\n" if background else ""
         block = f"### Item: {title} <!-- item:{item_id} -->\n{bg_line}"
-    insert_pos = section.content_end
-    if insert_pos < len(text) and text[insert_pos - 1] != "\n":
-        prefix = "\n\n"
-    else:
-        prefix = "\n"
-    return text[:insert_pos] + prefix + block + text[insert_pos:]
+    before = text[:section.content_end].rstrip()
+    after = text[section.content_end:].lstrip("\n")
+    suffix = f"\n\n{after}" if after else "\n"
+    return f"{before}\n\n{block.rstrip()}{suffix}"
 
 
 def insert_task(text: str, item_id: str, task_id: str, title: str) -> str:
@@ -458,8 +456,10 @@ def insert_task(text: str, item_id: str, task_id: str, title: str) -> str:
     m = pattern.search(text)
     if m is None:
         raise ValueError(f"item not found: {item_id}")
-    # Insert before next heading after this item
-    next_pos = _find_next_block_boundary(text, m.end())
+    # Append within the item, before the next item or section. Task headings
+    # are intentionally ignored so repeated creation preserves user order.
+    boundary = re.search(r"^#{2,3}\s+", text[m.end():], re.MULTILINE)
+    next_pos = m.end() + boundary.start() if boundary else len(text)
     new_task = {
         "task_id": task_id,
         "title": title,
@@ -563,6 +563,14 @@ def _set_item_background(text: str, item_id: str, background: str, schema_ver: i
     if m is None:
         raise ValueError(f"item heading not found for {item_id}")
     heading_end = m.end()
+    if schema_ver >= 2:
+        block_end = _find_next_block_boundary(text, heading_end)
+        prose = background.strip()
+        middle = f"\n\n{prose}\n" if prose else "\n"
+        if block_end < len(text):
+            middle += "\n"
+        return text[:heading_end] + middle + text[block_end:].lstrip("\n")
+
     lines = text.splitlines(keepends=True)
     # Find line index of heading
     heading_line_idx = None
