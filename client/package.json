@@ -1,6 +1,6 @@
 {
   "name": "workeventagent-client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "WorkEventAgent desktop client (Electron shell over the verified Python archiving core)",
   "main": "main.js",
   "author": "Clowder AI",
@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron .",
     "test:update": "node --test tests/update_manager.test.js",
+    "test:package-contract": "node --test tests/packaged_backend_contract.test.js",
     "dist:win": "electron-builder --win nsis --publish never",
     "release:win": "electron-builder --win nsis --publish always"
   },
@@ -22,6 +23,7 @@
     "appId": "ai.clowder.workeventagent",
     "productName": "WorkEventAgent",
     "asar": true,
+    "afterAllArtifactBuild": "scripts/verify-packaged-backend.cjs",
     "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "dist"

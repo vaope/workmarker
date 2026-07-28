@@ -8,11 +8,15 @@ def test_client_package_builds_and_publishes_windows_updates() -> None:
     assert "electron-updater" in package["dependencies"]
     assert "electron-builder" in package["devDependencies"]
     assert package["scripts"]["test:update"] == "node --test tests/update_manager.test.js"
+    assert package["scripts"]["test:package-contract"] == (
+        "node --test tests/packaged_backend_contract.test.js"
+    )
     assert package["scripts"]["dist:win"] == "electron-builder --win nsis --publish never"
     assert package["scripts"]["release:win"] == "electron-builder --win nsis --publish always"
 
     build = package["build"]
     assert build["appId"] == "ai.clowder.workeventagent"
+    assert build["afterAllArtifactBuild"] == "scripts/verify-packaged-backend.cjs"
     assert build["electronDist"] == "node_modules/electron/dist"
     assert build["win"] == {"target": ["nsis"], "icon": "assets/icon.png"}
     assert build["nsis"]["artifactName"] == "${productName}-Setup-${version}.${ext}"
