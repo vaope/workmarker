@@ -97,6 +97,17 @@ test('rejects backend calls outside the production main process boundary', () =>
       () => verifyClientCommandScope(root),
       /callBackend may only be invoked from client\/main\.js: windows\/rogue\.js/
     );
+
+    fs.rmSync(path.join(root, 'windows', 'rogue.js'));
+    fs.writeFileSync(
+      path.join(root, 'windows', 'python_bridge.js'),
+      "callBackend('complete_task', {});\n",
+      'utf8'
+    );
+    assert.throws(
+      () => verifyClientCommandScope(root),
+      /callBackend may only be invoked from client\/main\.js: windows\/python_bridge\.js/
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

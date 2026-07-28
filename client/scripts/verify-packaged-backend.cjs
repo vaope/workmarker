@@ -41,9 +41,10 @@ function productionJavaScriptFiles(root) {
 function verifyClientCommandScope(clientRoot) {
   const resolvedRoot = path.resolve(clientRoot);
   const mainPath = path.join(resolvedRoot, 'main.js');
+  const bridgePath = path.join(resolvedRoot, 'python_bridge.js');
   for (const file of productionJavaScriptFiles(resolvedRoot)) {
     if (path.resolve(file) === mainPath) continue;
-    if (path.basename(file) === 'python_bridge.js') continue;
+    if (path.resolve(file) === bridgePath) continue;
     const source = fs.readFileSync(file, 'utf8');
     if (/\bcallBackend\s*\(/.test(source) || /require\([^)]*python_bridge/.test(source)) {
       const relative = path.relative(resolvedRoot, file).split(path.sep).join('/');
