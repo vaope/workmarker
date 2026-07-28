@@ -7,9 +7,55 @@ function sorted(values) {
 
 function clientCommands(source) {
   const commands = new Set();
-  const pattern = /\bcallBackend\(\s*['"]([a-z][a-z0-9_]*)['"]/g;
-  for (const match of source.matchAll(pattern)) commands.add(match[1]);
+  const pattern = /\bcallBackend\s*\(/g;
+  for (const match of source.matchAll(pattern)) {
+    const argumentsSource = source.slice(match.index + match[0].length);
+    const literal = argumentsSource.match(
+      /^\s*(['"])([a-z][a-z0-9_]*)\1\s*,/
+    );
+    if (!literal) {
+      throw new Error(
+        'callBackend command must be a single- or double-quoted literal'
+      );
+    }
+    commands.add(literal[2]);
+  }
   return sorted(commands);
+}
+
+function productionJavaScriptFiles(root) {
+  const ignored = new Set(['dist', 'node_modules', 'scripts', 'tests']);
+  const files = [];
+  function visit(directory) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isDirectory() && ignored.has(entry.name)) continue;
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(entryPath);
+      else if (entry.isFile() && entry.name.endsWith('.js')) files.push(entryPath);
+    }
+  }
+  visit(root);
+  return files;
+}
+
+function verifyClientCommandScope(clientRoot) {
+  const resolvedRoot = path.resolve(clientRoot);
+  const mainPath = path.join(resolvedRoot, 'main.js');
+  for (const file of productionJavaScriptFiles(resolvedRoot)) {
+    if (path.resolve(file) === mainPath) continue;
+    if (path.basename(file) === 'python_bridge.js') continue;
+    const source = fs.readFileSync(file, 'utf8');
+    if (/\bcallBackend\s*\(/.test(source) || /require\([^)]*python_bridge/.test(source)) {
+      const relative = path.relative(resolvedRoot, file).split(path.sep).join('/');
+      throw new Error(
+        `callBackend may only be invoked from client/main.js: ${relative}`
+      );
+    }
+  }
+  return {
+    commands: clientCommands(fs.readFileSync(mainPath, 'utf8')),
+    mainPath,
+  };
 }
 
 function backendCommands(source) {
@@ -26,7 +72,8 @@ function backendCommands(source) {
 }
 
 function verifyPackagedBackend(mainPath, guiPath) {
-  const client = clientCommands(fs.readFileSync(mainPath, 'utf8'));
+  const scope = verifyClientCommandScope(path.dirname(mainPath));
+  const client = scope.commands;
   const backend = backendCommands(fs.readFileSync(guiPath, 'utf8'));
   const missing = [...client].filter((command) => !backend.has(command));
   if (missing.length) {
@@ -63,4 +110,5 @@ async function verifyAfterBuild(context) {
 module.exports = verifyAfterBuild;
 module.exports.backendCommands = backendCommands;
 module.exports.clientCommands = clientCommands;
+module.exports.verifyClientCommandScope = verifyClientCommandScope;
 module.exports.verifyPackagedBackend = verifyPackagedBackend;
