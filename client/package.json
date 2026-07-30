@@ -1,6 +1,6 @@
 {
   "name": "workeventagent-client",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "WorkEventAgent desktop client (Electron shell over the verified Python archiving core)",
   "main": "main.js",
   "author": "Clowder AI",

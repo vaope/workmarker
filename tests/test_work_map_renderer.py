@@ -98,12 +98,13 @@ def test_main_window_uses_confirmed_hierarchy_labels() -> None:
     assert "所属需求" not in combined
 
 
-def test_task_editor_uses_lifecycle_field_without_status_bypass() -> None:
+def test_task_editor_omits_next_action_without_status_bypass() -> None:
     source = Path("client/windows/main.js").read_text(encoding="utf-8")
     editor = source[source.index("function showTaskEditor"):source.index("function confirmDeleteTask")]
-    assert "te-lifecycle" in editor
+    assert "te-conclusion" in editor
     assert "te-status" not in editor
-    assert "task.status === 'done' ? 'conclusion' : 'next_action'" in editor
+    assert "next_action" not in editor
+    assert "'conclusion'" in editor
     assert "'status', 'done'" not in editor
     close_guard = "if (!taskCompletion.closeEditors()) return;"
     assert editor.index(close_guard) < editor.index(

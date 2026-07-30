@@ -812,23 +812,19 @@ function showTaskEditor(row, task) {
 
   const editor = document.createElement('div');
   editor.className = 'task-editor';
-  const lifecycleField = task.status === 'done'
+  const conclusionField = task.status === 'done'
     ? `<div class="te-row">
          <label>结论</label>
-         <input id="te-lifecycle" value="${esc(task.conclusion || '')}"
+         <input id="te-conclusion" value="${esc(task.conclusion || '')}"
            placeholder="记录完成结论…" />
        </div>`
-    : `<div class="te-row">
-         <label>下一步</label>
-         <input id="te-lifecycle" value="${esc(task.next_action || '')}"
-           placeholder="下一步要做什么…" />
-       </div>`;
+    : '';
   editor.innerHTML =
     `<div class="te-row">
        <label>名称</label>
        <input id="te-title" value="${esc(task.title)}" />
       </div>
-      ${lifecycleField}
+      ${conclusionField}
       <div class="te-acts">
         <button class="ghost small" id="te-cancel">取消</button>
        <button class="primary small-btn" id="te-save">保存</button>
@@ -843,19 +839,19 @@ function showTaskEditor(row, task) {
   editor.querySelector('#te-save').addEventListener('click', (e) => {
     e.stopPropagation();
     const newTitle = editor.querySelector('#te-title').value.trim();
-    const lifecycleValue = editor.querySelector('#te-lifecycle').value.trim();
-    saveTaskEdits(task, newTitle, lifecycleValue, row);
+    const conclusionInput = editor.querySelector('#te-conclusion');
+    const conclusionValue = conclusionInput ? conclusionInput.value.trim() : null;
+    saveTaskEdits(task, newTitle, conclusionValue, row);
   });
 
   editor.addEventListener('click', (e) => e.stopPropagation());
   editor.querySelector('#te-title').focus();
 }
 
-async function saveTaskEdits(task, newTitle, lifecycleValue, row) {
+async function saveTaskEdits(task, newTitle, conclusionValue, row) {
   const projectPath = state.currentProject.path;
   const errors = [];
-  const lifecycleField = task.status === 'done' ? 'conclusion' : 'next_action';
-  const previousValue = task[lifecycleField] || '';
+  const previousConclusion = task.conclusion || '';
 
   try {
     if (newTitle && newTitle !== task.title) {
@@ -869,17 +865,15 @@ async function saveTaskEdits(task, newTitle, lifecycleValue, row) {
         errors.push(`名称：${(result && result.error) || '失败'}`);
       }
     }
-    if (lifecycleValue !== previousValue) {
+    if (conclusionValue !== null && conclusionValue !== previousConclusion) {
       const result = await wea.updateTask(
         projectPath,
         task.task_id,
-        lifecycleField,
-        lifecycleValue,
+        'conclusion',
+        conclusionValue,
       );
       if (!result || !result.ok) {
-        errors.push(`${lifecycleField === 'conclusion' ? '结论' : '下一步'}：${
-          (result && result.error) || '失败'
-        }`);
+        errors.push(`结论：${(result && result.error) || '失败'}`);
       }
     }
 
