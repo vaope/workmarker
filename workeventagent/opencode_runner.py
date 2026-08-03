@@ -125,11 +125,7 @@ def parse_archivist_output(
     event_id: str,
     source_text: str | None = None,
 ) -> ArchiveProposal:
-    inner = _extract_json_text(raw)
-    try:
-        data = json.loads(inner)
-    except json.JSONDecodeError as exc:
-        raise OpencodeRunnerError(f"invalid JSON from archivist: {exc}") from exc
+    data = _load_json_object(raw, "archivist", _REQUIRED_TOP_KEYS)
 
     _validate_required_keys(data)
 
@@ -400,10 +396,11 @@ def _reject_forbidden_agent_keys(value: object) -> None:
 
 def parse_synthesis_output(raw: str) -> dict:
     """Parse the read-only synthesizer response without accepting control data."""
-    try:
-        data = json.loads(_extract_json_text(raw))
-    except json.JSONDecodeError as exc:
-        raise OpencodeRunnerError(f"invalid JSON from synthesizer: {exc}") from exc
+    data = _load_json_object(
+        raw,
+        "synthesizer",
+        {"changes", "document_suggestion"},
+    )
     if not isinstance(data, dict) or set(data) != {"changes", "document_suggestion"}:
         raise OpencodeRunnerError("synthesizer output must contain exactly changes and document_suggestion")
     _reject_forbidden_agent_keys(data)
@@ -476,11 +473,7 @@ def _normalize_status(raw_status: object) -> str:
 
 
 def parse_project_route_output(raw: str, allowed_project_ids: set[str]) -> dict:
-    inner = _extract_json_text(raw)
-    try:
-        data = json.loads(inner)
-    except json.JSONDecodeError as exc:
-        raise OpencodeRunnerError(f"invalid JSON from project router: {exc}") from exc
+    data = _load_json_object(raw, "project router", {"project_id"})
 
     project_id = str(data.get("project_id", "")).strip()
     if not project_id:
@@ -503,10 +496,55 @@ def parse_project_route_output(raw: str, allowed_project_ids: set[str]) -> dict:
 def _extract_json_text(raw: str) -> str:
     """Extract JSON payload from opencode NDJSON output.
 
-    opencode --format json outputs NDJSON lines. We look for type=text
-    lines and extract .part.text, which may contain a ```json``` fence.
-    If no NDJSON structure is detected, treat the raw input as plain JSON/NDJSON.
+    opencode versions and providers may emit more than one text part, or wrap
+    the final JSON in prose. Return the last decodable JSON candidate so legacy
+    callers receive the final answer instead of the first explanatory fragment.
     """
+    candidates = list(_iter_json_candidates(raw))
+    for candidate in reversed(candidates):
+        try:
+            json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        return candidate
+
+    text_parts = _opencode_text_parts(raw)
+    fallback = text_parts[-1] if text_parts else raw
+    return _extract_json_from_fence(fallback)
+
+
+def _load_json_object(
+    raw: str,
+    source: str,
+    required_keys: set[str] | frozenset[str] = frozenset(),
+) -> dict:
+    """Return the last JSON object that satisfies an output contract.
+
+    A model may emit valid but non-final JSON (for example a progress note)
+    before the actual response. Prefer the last object containing the required
+    top-level keys, while preserving the existing field-specific validation
+    errors when only incomplete objects were returned.
+    """
+    objects: list[dict] = []
+    for candidate in _iter_json_candidates(raw):
+        try:
+            value = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(value, dict):
+            objects.append(value)
+
+    for value in reversed(objects):
+        if required_keys <= value.keys():
+            return value
+    if objects:
+        return objects[-1]
+    raise OpencodeRunnerError(f"invalid JSON from {source}: no JSON object found")
+
+
+def _opencode_text_parts(raw: str) -> list[str]:
+    """Collect every assistant text part from opencode NDJSON output."""
+    parts: list[str] = []
     for line in raw.splitlines():
         line = line.strip()
         if not line:
@@ -515,21 +553,64 @@ def _extract_json_text(raw: str) -> str:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if record.get("type") == "text":
+        if isinstance(record, dict) and record.get("type") == "text":
             part = record.get("part", {})
-            if part.get("type") == "text" and "text" in part:
+            if (
+                isinstance(part, dict)
+                and part.get("type") == "text"
+                and isinstance(part.get("text"), str)
+            ):
                 text = part["text"]
-                return _extract_json_from_fence(text)
+                parts.append(text)
+    return parts
 
-    # Fallback: treat raw text as plain JSON (no NDJSON wrapper / no fence)
-    return _extract_json_from_fence(raw)
+
+def _iter_json_candidates(raw: str):
+    """Yield fenced, plain, and prose-embedded JSON candidates in order."""
+    text_parts = _opencode_text_parts(raw)
+    sources = list(text_parts) if text_parts else [raw]
+    if len(text_parts) > 1:
+        # Some opencode/provider combinations stream one JSON document across
+        # several type=text records. Joining without a separator reconstructs it.
+        sources.append("".join(text_parts))
+
+    decoder = json.JSONDecoder()
+    for text in sources:
+        for match in _JSON_FENCE_RE.finditer(text):
+            candidate = match.group(1).strip()
+            if candidate:
+                yield candidate
+
+        stripped = text.strip()
+        if stripped:
+            yield stripped
+
+        # raw_decode lets us recover an unfenced JSON object after explanatory
+        # prose without accepting the prose itself as part of the payload.
+        position = 0
+        while position < len(text):
+            object_start = text.find("{", position)
+            array_start = text.find("[", position)
+            starts = [start for start in (object_start, array_start) if start >= 0]
+            if not starts:
+                break
+            start = min(starts)
+            try:
+                _, end = decoder.raw_decode(text, start)
+            except json.JSONDecodeError:
+                position = start + 1
+                continue
+            yield text[start:end]
+            position = end
+
+
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
 
 def _extract_json_from_fence(text: str) -> str:
-    fence_re = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
-    match = fence_re.search(text)
+    match = _JSON_FENCE_RE.search(text)
     if match:
-        return match.group(1)
+        return match.group(1).strip()
     return text
 
 
@@ -554,11 +635,7 @@ def run_synthesizer(
 
 def parse_synthesizer_output(raw: str) -> dict:
     """Parse synthesizer JSON output: {kind, sections: [{section_id, content, reason, source_event_ids}]}"""
-    inner = _extract_json_text(raw)
-    try:
-        data = json.loads(inner)
-    except json.JSONDecodeError as exc:
-        raise OpencodeRunnerError(f"invalid JSON from synthesizer: {exc}") from exc
+    data = _load_json_object(raw, "synthesizer", {"kind", "sections"})
 
     required = {"kind", "sections"}
     missing = required - data.keys()

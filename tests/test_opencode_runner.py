@@ -326,11 +326,103 @@ class OpencodeRunnerTest(unittest.TestCase):
         self.assertAlmostEqual(route["confidence"], 0.86)
         self.assertIn("project B", route["reason"])
 
+    def test_parse_project_route_output_uses_last_complete_json_text_part(self):
+        raw = "\n".join([
+            json.dumps({
+                "type": "text",
+                "part": {"type": "text", "text": '{"note":"I will inspect the projects first."}'},
+            }),
+            json.dumps({
+                "type": "text",
+                "part": {
+                    "type": "text",
+                    "text": (
+                        "```json\n"
+                        '{"project_id":"project-b","confidence":0.82,"reason":"matched B"}'
+                        "\n```"
+                    ),
+                },
+            }),
+        ])
+
+        route = parse_project_route_output(raw, {"project-a", "project-b"})
+
+        self.assertEqual(route["project_id"], "project-b")
+        self.assertAlmostEqual(route["confidence"], 0.82)
+
+    def test_parse_project_route_output_extracts_unfenced_json_after_prose(self):
+        raw = (
+            "I matched the update against the available projects.\n"
+            '{"project_id":"project-b","confidence":0.79,"reason":"matched B"}'
+        )
+
+        route = parse_project_route_output(raw, {"project-a", "project-b"})
+
+        self.assertEqual(route["project_id"], "project-b")
+        self.assertAlmostEqual(route["confidence"], 0.79)
+
+    def test_parse_project_route_output_reassembles_streamed_text_parts(self):
+        raw = "\n".join([
+            json.dumps({
+                "type": "text",
+                "part": {
+                    "type": "text",
+                    "text": '{"project_id":"project-b",',
+                },
+            }),
+            json.dumps({
+                "type": "text",
+                "part": {
+                    "type": "text",
+                    "text": '"confidence":0.76,"reason":"matched B"}',
+                },
+            }),
+        ])
+
+        route = parse_project_route_output(raw, {"project-a", "project-b"})
+
+        self.assertEqual(route["project_id"], "project-b")
+        self.assertAlmostEqual(route["confidence"], 0.76)
+
     def test_parse_project_route_output_rejects_unknown_project(self):
         raw = '{"project_id":"missing-project","confidence":0.9,"reason":"bad"}'
 
         with self.assertRaises(OpencodeRunnerError):
             parse_project_route_output(raw, {"project-a"})
+
+    def test_parse_archivist_output_uses_last_complete_json_text_part(self):
+        final_payload = {
+            "target": {
+                "project_id": "multimodal-labeling",
+                "item_id": "kv-cache-few-shot",
+                "task_id": "kv-cache-blockers",
+            },
+            "confidence": 0.91,
+            "reason": "Matched KV cache item",
+            "event": {
+                "task_id": "kv-cache-blockers",
+                "input_text": "input",
+                "summary": "summary",
+                "status": "in_progress",
+                "next_action": "next",
+            },
+            "attachment_paths": [],
+        }
+        raw = "\n".join([
+            json.dumps({
+                "type": "text",
+                "part": {"type": "text", "text": '{"note":"Preparing the proposal."}'},
+            }),
+            json.dumps({
+                "type": "text",
+                "part": {"type": "text", "text": json.dumps(final_payload)},
+            }),
+        ])
+
+        proposal = parse_archivist_output(raw, "wrapper-event-id")
+
+        self.assertEqual(proposal.target.project_id, "multimodal-labeling")
+        self.assertEqual(proposal.event.event_id, "wrapper-event-id")
 
     def test_parse_archivist_output_rejects_missing_required_keys(self):
         bad = '{"target": {"project_id": "p"}}'

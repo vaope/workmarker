@@ -71,6 +71,20 @@ def test_project_panorama_reuses_the_vertical_scroll_container() -> None:
     assert "min-height: 0" in content_rule
 
 
+def test_main_window_repaints_after_visibility_and_size_changes() -> None:
+    source = Path("client/main.js").read_text(encoding="utf-8")
+    create_window = source[
+        source.index("function createMainWindow"):
+        source.index("function createCaptureWindow")
+    ]
+
+    assert "scheduleMainWindowRepaint" in source
+    assert "mainWindow.webContents.invalidate()" in source
+    assert "mainWindowRepaintScheduled" in source
+    for event_name in ("show", "restore", "maximize", "unmaximize", "resize"):
+        assert f"mainWindow.on('{event_name}', scheduleMainWindowRepaint)" in create_window
+
+
 def test_reviewed_section_editors_send_base_hashes() -> None:
     source = Path("client/windows/main.js").read_text(encoding="utf-8")
     assert "baseSectionHash" in source

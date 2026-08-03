@@ -20,6 +20,7 @@ let captureWindow = null;
 let tray = null;
 let isQuitting = false;
 let updateManager = null;
+let mainWindowRepaintScheduled = false;
 
 const PENDING_DIR = path.join(os.tmpdir(), 'workeventagent', 'pending');
 const cfg = () => loadConfig();
@@ -142,6 +143,16 @@ function scheduleInitialUpdateCheck() {
 
 // --- windows ---------------------------------------------------------------
 
+function scheduleMainWindowRepaint() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindowRepaintScheduled) return;
+  mainWindowRepaintScheduled = true;
+  setTimeout(() => {
+    mainWindowRepaintScheduled = false;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.invalidate();
+  }, 16);
+}
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1040, height: 700, minWidth: 780, minHeight: 500,
@@ -156,6 +167,12 @@ function createMainWindow() {
   });
   mainWindow.removeMenu();
   mainWindow.loadFile(path.join(__dirname, 'windows', 'main.html'));
+  mainWindow.webContents.on('did-finish-load', scheduleMainWindowRepaint);
+  mainWindow.on('show', scheduleMainWindowRepaint);
+  mainWindow.on('restore', scheduleMainWindowRepaint);
+  mainWindow.on('maximize', scheduleMainWindowRepaint);
+  mainWindow.on('unmaximize', scheduleMainWindowRepaint);
+  mainWindow.on('resize', scheduleMainWindowRepaint);
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
