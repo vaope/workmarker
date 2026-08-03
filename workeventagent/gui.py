@@ -207,7 +207,7 @@ def handle_propose(request: dict) -> dict:
     now = datetime.now(timezone.utc)
     event_id = make_event_id(now, tentative_task_id, existing_event_ids)
 
-    proposal = parse_archivist_output(raw, event_id)
+    proposal = parse_archivist_output(raw, event_id, source_text=text)
     knowledge_impact = parse_knowledge_impact(raw)
 
     # Anti-collision for new_task

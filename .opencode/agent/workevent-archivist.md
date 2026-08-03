@@ -27,7 +27,6 @@ Required JSON shape:
   "reason": "string",
   "event": {
     "task_id": "string",
-    "input_text": "string",
     "summary": "string",
     "status": "in_progress",
     "next_action": "string"
@@ -41,7 +40,23 @@ Required JSON shape:
 }
 
 Do NOT output `markdown_preview` or `event_id` — the wrapper owns Markdown rendering
-and event ID generation deterministically.
+and event ID generation deterministically. The wrapper also owns `input_text` and
+copies the source update verbatim; do not summarize or repeat it as a control field.
+
+Information-preservation rules:
+- The source update is authoritative. Read every line, bullet, and parenthetical list.
+- `summary` must be a faithful compression, not a broader interpretation.
+- Preserve every material fact, especially named technologies, models, standards,
+  acronyms, input data types or modalities, expected outputs, labels, stages,
+  events, constraints, and intended outcomes.
+- Do not replace a specific technical topic with a broader field.
+- Do not omit later lines, bullets, enumerations, or parenthetical details.
+- Do not invent concepts, goals, or scope that are absent from the source.
+- When the source is already concise, keep the summary nearly verbatim.
+- Information preservation is more important than making the summary short.
+- `task_title` must name the specific technical object, not only its parent field.
+- `next_action` must stay within the source scope and retain its key technologies
+  and target outputs; do not expand a focused task into a general domain survey.
 
 Status values are strictly limited to:
 - `in_progress` for anything still ongoing, waiting, blocked, or needing a next action.

@@ -120,7 +120,11 @@ def _resolve_executable(opencode_bin: str) -> str:
     return shutil.which(opencode_bin) or opencode_bin
 
 
-def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
+def parse_archivist_output(
+    raw: str,
+    event_id: str,
+    source_text: str | None = None,
+) -> ArchiveProposal:
     inner = _extract_json_text(raw)
     try:
         data = json.loads(inner)
@@ -133,6 +137,15 @@ def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
     status = _normalize_status(ev.get("status", "in_progress"))
 
     target = data["target"]
+    if source_text is not None:
+        input_text = source_text
+    else:
+        input_text = str(ev.get("input_text", ""))
+        if not input_text.strip():
+            raise OpencodeRunnerError(
+                "source text is required when archivist output omits input_text"
+            )
+    summary = _faithful_summary(input_text, str(ev["summary"]))
 
     if target.get("new_task") and not target.get("task_title", "").strip():
         raise OpencodeRunnerError("task_title is required when new_task is true")
@@ -152,8 +165,8 @@ def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
         event=TimelineEvent(
             event_id=event_id,
             task_id=ev["task_id"],
-            input_text=ev["input_text"],
-            summary=ev["summary"],
+            input_text=input_text,
+            summary=summary,
             status=status,
             next_action=ev.get("next_action", ""),
             event_type=ev.get("event_type", "update"),
@@ -162,6 +175,114 @@ def parse_archivist_output(raw: str, event_id: str) -> ArchiveProposal:
         attachment_paths=tuple(data.get("attachment_paths", [])),
     )
     return proposal
+
+
+def _faithful_summary(source_text: str, proposed_summary: str) -> str:
+    """Keep a specific summary, or fall back to a lossless normalized source."""
+    source = source_text.strip()
+    summary = proposed_summary.strip()
+    if not source:
+        return summary
+
+    normalized_summary = _comparison_text(summary)
+    missing_terms = [
+        term
+        for term in _protected_source_terms(source)
+        if _comparison_text(term) not in normalized_summary
+    ]
+    source_for_summary = _normalize_source_as_summary(source)
+    overcompressed = (
+        len(source_for_summary) <= 240
+        and len(summary) < int(len(source_for_summary) * 0.45)
+    )
+    unrepresented_bullet = any(
+        not _bullet_is_represented(bullet, summary)
+        for bullet in _source_bullets(source)
+    )
+    if not summary or missing_terms or overcompressed or unrepresented_bullet:
+        return source_for_summary
+    return summary
+
+
+def _protected_source_terms(source_text: str) -> list[str]:
+    """Extract explicit technical facts that a summary must not silently drop."""
+    terms: list[str] = []
+    terms.extend(re.findall(
+        r"(?<![A-Za-z0-9])[A-Z][A-Z0-9.+#_-]*(?:/[A-Z0-9.+#_-]+)*(?![A-Za-z0-9])",
+        source_text,
+    ))
+    for match in re.finditer(r"[（(]([^）)]{2,80})[）)]", source_text):
+        terms.extend(re.split(r"[、,，；;]", match.group(1)))
+    for match in re.finditer(
+        r"(?:对|将)([^。；\n]{2,80}?)等?(?:进行|执行|生成|用于)",
+        source_text,
+    ):
+        terms.extend(re.split(r"[、,，；;]", match.group(1)))
+    terms.extend(re.findall(
+        r"(?:降低|减少|提升|提高|避免|确保|实现)[^，。；\n]{2,40}",
+        source_text,
+    ))
+    cleaned = [term.strip() for term in terms if len(term.strip()) >= 2]
+    return list(dict.fromkeys(cleaned))
+
+
+def _normalize_source_as_summary(source_text: str) -> str:
+    parts: list[str] = []
+    for raw_line in source_text.splitlines():
+        line = re.sub(r"^\s*(?:[-*•·]+|\d+[.)、])\s*", "", raw_line).strip()
+        line = line.rstrip("；;。").strip()
+        if line:
+            parts.append(line)
+    normalized = "；".join(parts) or source_text.strip()
+    return normalized.rstrip("；;。") + "。"
+
+
+def _source_bullets(source_text: str) -> list[str]:
+    bullets: list[str] = []
+    for line in source_text.splitlines():
+        match = re.match(r"^\s*(?:[-*•·]+|\d+[.)、])\s*(.+)", line)
+        if match:
+            bullet = match.group(1).strip()
+            if bullet:
+                bullets.append(bullet)
+    return bullets
+
+
+def _bullet_is_represented(bullet: str, summary: str) -> bool:
+    """Require a small lexical anchor from every explicit source bullet."""
+    bullet_markers = _cjk_bigrams(bullet) - _GENERIC_CJK_BIGRAMS
+    if not bullet_markers:
+        return True
+    summary_markers = _cjk_bigrams(summary)
+    required_matches = min(2, len(bullet_markers))
+    return len(bullet_markers & summary_markers) >= required_matches
+
+
+def _cjk_bigrams(value: str) -> set[str]:
+    markers: set[str] = set()
+    for segment in re.findall(r"[\u3400-\u9fff]+", value):
+        markers.update(segment[index:index + 2] for index in range(len(segment) - 1))
+    return markers
+
+
+_GENERIC_CJK_BIGRAMS = {
+    "任务",
+    "工作",
+    "开始",
+    "进行",
+    "继续",
+    "相关",
+    "问题",
+    "处理",
+    "检查",
+    "确认",
+    "记录",
+    "系统",
+}
+
+
+def _comparison_text(value: str) -> str:
+    return re.sub(r"\s+", "", value).casefold()
 
 
 _KNOWLEDGE_DIMENSIONS = {"goal", "scope", "architecture", "risk", "milestone"}
@@ -414,7 +535,7 @@ def _extract_json_from_fence(text: str) -> str:
 
 _REQUIRED_TOP_KEYS = {"target", "confidence", "reason", "event"}
 _REQUIRED_TARGET_KEYS = {"project_id", "item_id", "task_id"}
-_REQUIRED_EVENT_KEYS = {"task_id", "input_text", "summary", "status", "next_action"}
+_REQUIRED_EVENT_KEYS = {"task_id", "summary", "status", "next_action"}
 
 
 # ── Phase B synthesis agent ───────────────────────────────────

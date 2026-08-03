@@ -268,6 +268,7 @@ class ProposeTest(unittest.TestCase):
         self.assertEqual(p["target"]["project_id"], "multimodal-labeling")
         self.assertIn("confidence", p)
         self.assertIn("event", p)
+        self.assertEqual(p["event"]["input_text"], "Reviewed blockers.")
 
     @patch("workeventagent.gui.run_archivist")
     def test_propose_low_confidence_flag(self, run_archivist):

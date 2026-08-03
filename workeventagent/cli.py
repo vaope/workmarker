@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None, now: datetime | None = None) -> int:
 
     # 3. Full parse
     try:
-        proposal = parse_archivist_output(raw, event_id)
+        proposal = parse_archivist_output(raw, event_id, source_text=args.text)
     except OpencodeRunnerError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
